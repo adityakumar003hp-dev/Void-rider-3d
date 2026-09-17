@@ -1,0 +1,700 @@
+import React, { useRef, useState, useEffect } from 'react';
+import {
+  Zap,
+  Shield,
+  Clock,
+  Pause,
+  Camera,
+  AlertTriangle,
+  AlertOctagon,
+  Magnet,
+  RotateCcw,
+  Wind,
+  ChevronsUp,
+  Wrench,
+  Radio,
+  Hourglass,
+  Anchor,
+  Copy,
+  Flame,
+} from 'lucide-react';
+import { ActivePowerUp, CameraMode, DynamicTrackEvent, PlayerInput, ShipDamageZones } from '../types';
+
+interface RaceHUDProps {
+  speed: number;
+  boost: number;
+  currentLap: number;
+  totalLaps: number;
+  rank: number;
+  totalPlayers: number;
+  checkpoint: number;
+  totalCheckpoints: number;
+  countdown: number | null;
+  activeEvent: DynamicTrackEvent | null;
+  hazardHitMessage: string | null;
+  shortcutMessage: string | null;
+  powerUps: ActivePowerUp[];
+  hullHealth: number;
+  sessionCredits: number;
+  distanceMeters: number;
+  milestoneMessage: string | null;
+  isWrongWay: boolean;
+  destroyedMessage: string | null;
+  respawnTimeRemaining: number;
+  currentLapMs: number;
+  bestLapMs: number;
+  cameraMode: CameraMode;
+  trackId?: string;
+  damageZones?: ShipDamageZones;
+  onTogglePause: () => void;
+  onToggleCamera: () => void;
+  onInputChange?: (input: Partial<PlayerInput>) => void;
+  onRecover?: () => void;
+}
+
+const SECTOR_NAMES: Record<string, string> = {
+  circuit_alpha: 'SECTOR ALPHA',
+  neon_orbit: 'NEON ORBIT',
+  void_rift: 'VOID RIFT',
+  asteroid_run: 'ASTEROID RUN',
+  cosmic_ring: 'COSMIC RING',
+  quantum_highway: 'QUANTUM HWY',
+  nebula_rift: 'NEBULA RIFT',
+};
+
+export const RaceHUD: React.FC<RaceHUDProps> = ({
+  speed,
+  boost,
+  currentLap,
+  totalLaps,
+  rank,
+  totalPlayers,
+  checkpoint,
+  totalCheckpoints,
+  countdown,
+  activeEvent,
+  hazardHitMessage,
+  shortcutMessage,
+  powerUps,
+  hullHealth,
+  sessionCredits,
+  distanceMeters,
+  milestoneMessage,
+  isWrongWay,
+  destroyedMessage,
+  respawnTimeRemaining,
+  currentLapMs,
+  bestLapMs,
+  cameraMode,
+  trackId = 'circuit_alpha',
+  damageZones,
+  onTogglePause,
+  onToggleCamera,
+  onInputChange,
+  onRecover,
+}) => {
+  // Joystick State
+  const [stickPos, setStickPos] = useState({ x: 0, y: 0 });
+  const [touchActive, setTouchActive] = useState(false);
+  const joystickRef = useRef<HTMLDivElement>(null);
+  const pointerIdRef = useRef<number | null>(null);
+
+  // Format race timer: mm:ss. and hundredths (SS)
+  const formatMinSec = (ms: number) => {
+    if (ms <= 0) return '00:00';
+    const totalSec = Math.floor(ms / 1000);
+    const min = Math.floor(totalSec / 60);
+    const sec = totalSec % 60;
+    return `${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+  };
+
+  const formatHundredths = (ms: number) => {
+    if (ms <= 0) return '00';
+    const hundredths = Math.floor((ms % 1000) / 10);
+    return hundredths.toString().padStart(2, '0');
+  };
+
+  // Joystick pointer handlers
+  const handlePointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    if (pointerIdRef.current !== null) return;
+    pointerIdRef.current = e.pointerId;
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    setTouchActive(true);
+    updateJoystick(e.clientX, e.clientY);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (e.pointerId !== pointerIdRef.current) return;
+    e.preventDefault();
+    updateJoystick(e.clientX, e.clientY);
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (e.pointerId === pointerIdRef.current) {
+      pointerIdRef.current = null;
+      setTouchActive(false);
+      setStickPos({ x: 0, y: 0 });
+      onInputChange?.({ steer: 0, throttle: 0 });
+    }
+  };
+
+  const updateJoystick = (clientX: number, clientY: number) => {
+    if (!joystickRef.current) return;
+    const rect = joystickRef.current.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+
+    let deltaX = clientX - centerX;
+    let deltaY = clientY - centerY;
+    const maxRadius = (rect.width / 2) * 0.72;
+
+    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+    if (distance > maxRadius) {
+      deltaX = (deltaX / distance) * maxRadius;
+      deltaY = (deltaY / distance) * maxRadius;
+    }
+
+    setStickPos({ x: deltaX, y: deltaY });
+
+    const steer = Math.max(-1, Math.min(1, deltaX / maxRadius));
+    // Invert Y so pushing up provides forward acceleration
+    const throttle = Math.max(-1, Math.min(1, -deltaY / maxRadius));
+
+    onInputChange?.({
+      steer: Math.abs(steer) > 0.06 ? steer : 0,
+      throttle: Math.abs(throttle) > 0.06 ? throttle : 0,
+    });
+  };
+
+  // Compute Radar Player Blip Coordinates along the loop
+  const totalGates = Math.max(1, totalCheckpoints);
+  const gateProgress = (checkpoint % totalGates) / totalGates;
+  const radarAngle = gateProgress * Math.PI * 2 - Math.PI / 2;
+  const radarPlayerX = 50 + 26 * Math.cos(radarAngle);
+  const radarPlayerY = 50 + 26 * Math.sin(radarAngle) * (1 - 0.25 * Math.sin(radarAngle));
+
+  const sectorTitle = SECTOR_NAMES[trackId] || 'SECTOR ALPHA';
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-20 select-none p-3 sm:p-5 flex flex-col justify-between overflow-hidden">
+      {/* ================= TOP TELEMETRY SECTION ================= */}
+      <div className="flex items-start justify-between w-full">
+        {/* Top Left: Logo & Position / Lap Card */}
+        <div className="flex flex-col items-start select-none">
+          <div className="text-[#00f0ff] font-ui font-black italic tracking-widest text-lg sm:text-xl drop-shadow-[0_0_12px_rgba(0,240,255,0.85)] leading-tight">
+            VOID-RIDER 3D
+          </div>
+          <div className="text-[#ff00e5] font-ui font-bold italic tracking-wider text-[10px] sm:text-xs drop-shadow-[0_0_8px_rgba(255,0,229,0.7)] mt-[-1px]">
+            RACE BEYOND LIMITS
+          </div>
+
+          {/* Position & Lap Box */}
+          <div className="mt-2.5 flex flex-col bg-[#050b14]/90 border border-cyan-500/40 rounded-2xl p-2 sm:p-2.5 backdrop-blur-md shadow-[0_0_15px_rgba(0,240,255,0.2)]">
+            <div className="flex items-center gap-3">
+              {/* Position */}
+              <div className="flex flex-col">
+                <span className="text-[9px] font-mono font-bold text-cyan-400/80 tracking-wider">
+                  POSITION
+                </span>
+                <div className="flex items-baseline mt-0.5">
+                  <span className="text-cyan-300 bg-cyan-950/90 border border-cyan-400/70 rounded px-1.5 py-0.5 font-ui font-black text-xl sm:text-2xl leading-none">
+                    {String(rank || 6).padStart(2, '0')}
+                  </span>
+                  <span className="text-xs font-mono font-bold text-cyan-500/70 ml-1">
+                    /{String(totalPlayers || 1).padStart(2, '0')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Lap */}
+              <div className="flex flex-col border-l border-slate-800 pl-3">
+                <span className="text-[9px] font-mono font-bold text-slate-400 tracking-wider">
+                  LAP
+                </span>
+                <div className="flex items-baseline mt-0.5">
+                  <span className="text-white bg-slate-800/90 border border-slate-600/70 rounded px-1.5 py-0.5 font-ui font-black text-xl sm:text-2xl leading-none">
+                    {String(Math.min(currentLap, totalLaps) || 1).padStart(2, '0')}
+                  </span>
+                  <span className="text-xs font-mono font-bold text-slate-400 ml-1">
+                    /{String(totalLaps || 2).padStart(2, '0')}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* 4 horizontal indicator segments */}
+            <div className="flex items-center gap-1.5 mt-2">
+              {[0, 1, 2, 3].map(seg => {
+                const activeSeg = Math.floor((checkpoint / Math.max(1, totalCheckpoints)) * 4);
+                return (
+                  <div
+                    key={seg}
+                    className={`h-0.5 w-4 rounded-full transition-all duration-300 ${
+                      seg <= activeSeg
+                        ? 'bg-cyan-400 shadow-[0_0_6px_#00f0ff]'
+                        : 'bg-slate-700/60'
+                    }`}
+                  />
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Hull & Systems Damage Card */}
+          <div className="mt-2 flex flex-col bg-[#050b14]/90 border border-slate-700/60 rounded-xl p-2 backdrop-blur-md min-w-[150px]">
+            <div className="flex items-center justify-between text-[8px] font-mono font-bold text-slate-400">
+              <span>HULL INTEGRITY</span>
+              <span className={hullHealth < 35 ? 'text-rose-400 animate-pulse' : 'text-emerald-400'}>
+                {Math.round(hullHealth)}%
+              </span>
+            </div>
+            <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden mt-0.5">
+              <div
+                className={`h-full transition-all duration-200 ${
+                  hullHealth < 35 ? 'bg-rose-500' : hullHealth < 70 ? 'bg-amber-400' : 'bg-emerald-400'
+                }`}
+                style={{ width: `${Math.max(0, Math.min(100, hullHealth))}%` }}
+              />
+            </div>
+            {damageZones && (
+              <div className="grid grid-cols-4 gap-1 mt-1.5 text-[7px] font-mono text-center">
+                <div className={`px-1 py-0.5 rounded ${damageZones.frontHull > 40 ? 'bg-rose-950/80 text-rose-300 border border-rose-600/50 animate-pulse' : 'bg-slate-900/60 text-slate-400'}`}>
+                  NOSE
+                </div>
+                <div className={`px-1 py-0.5 rounded ${damageZones.leftWing > 40 ? 'bg-rose-950/80 text-rose-300 border border-rose-600/50 animate-pulse' : 'bg-slate-900/60 text-slate-400'}`}>
+                  L-WING
+                </div>
+                <div className={`px-1 py-0.5 rounded ${damageZones.rightWing > 40 ? 'bg-rose-950/80 text-rose-300 border border-rose-600/50 animate-pulse' : 'bg-slate-900/60 text-slate-400'}`}>
+                  R-WING
+                </div>
+                <div className={`px-1 py-0.5 rounded ${damageZones.rearEngine > 40 ? 'bg-rose-950/80 text-rose-300 border border-rose-600/50 animate-pulse' : 'bg-slate-900/60 text-slate-400'}`}>
+                  ENG
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Top Right: Camera, Pause, Race Timer & Minimap Radar */}
+        <div className="flex flex-col items-end gap-2 sm:gap-2.5 select-none">
+          {/* Camera & Pause Buttons */}
+          <div className="flex items-center gap-2 pointer-events-auto">
+            <button
+              onClick={onToggleCamera}
+              className="w-9 h-9 rounded-xl bg-[#060c18]/85 border border-cyan-500/40 text-cyan-400 hover:text-white active:scale-95 flex items-center justify-center transition-all shadow-md cursor-pointer"
+              title={`Camera Mode: ${cameraMode}`}
+            >
+              <Camera className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onTogglePause}
+              className="w-9 h-9 rounded-xl bg-[#060c18]/85 border border-cyan-500/40 text-cyan-400 hover:text-white active:scale-95 flex items-center justify-center transition-all shadow-md cursor-pointer"
+              title="Pause Race"
+            >
+              <Pause className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Race Timer Card */}
+          <div className="flex flex-col items-end bg-[#050b14]/90 border border-cyan-500/40 rounded-2xl p-2 sm:p-2.5 backdrop-blur-md shadow-[0_0_15px_rgba(0,240,255,0.2)] min-w-[125px]">
+            <span className="text-[9px] font-mono font-bold text-cyan-400/80 tracking-widest uppercase">
+              RACE TIMER
+            </span>
+            <div className="flex items-baseline font-mono font-bold mt-0.5">
+              <span className="text-lg text-white font-bold tracking-wider">
+                {formatMinSec(currentLapMs)}.
+              </span>
+              <span className="text-lg text-[#ff00e5] font-black tracking-wider">
+                {formatHundredths(currentLapMs)}
+              </span>
+            </div>
+            <div className="text-[10px] font-mono font-bold text-cyan-400 tracking-wider mt-0.5">
+              GATE {checkpoint}/{totalCheckpoints}
+            </div>
+          </div>
+
+          {/* Circular Minimap Radar */}
+          <div className="w-20 h-20 sm:w-22 sm:h-22 rounded-full border border-cyan-500/40 bg-[#040812]/90 backdrop-blur-md relative flex items-center justify-center overflow-hidden shadow-[0_0_15px_rgba(0,240,255,0.2)] pointer-events-none mt-1">
+            {/* Radar Grid SVG */}
+            <svg className="absolute inset-0 w-full h-full opacity-35" viewBox="0 0 100 100">
+              <circle cx="50" cy="50" r="46" fill="none" stroke="#00f0ff" strokeWidth="0.8" strokeDasharray="2,2" />
+              <circle cx="50" cy="50" r="32" fill="none" stroke="#00f0ff" strokeWidth="0.8" strokeDasharray="2,2" />
+              <circle cx="50" cy="50" r="16" fill="none" stroke="#00f0ff" strokeWidth="0.8" strokeDasharray="2,2" />
+              <line x1="50" y1="4" x2="50" y2="96" stroke="#00f0ff" strokeWidth="0.6" strokeDasharray="2,2" />
+              <line x1="4" y1="50" x2="96" y2="50" stroke="#00f0ff" strokeWidth="0.6" strokeDasharray="2,2" />
+            </svg>
+
+            {/* Track Ribbon Shape SVG matching Sector Alpha heart-loop */}
+            <svg className="absolute inset-0 w-full h-full p-2" viewBox="0 0 100 100">
+              {/* Glowing Outer Track Loop */}
+              <path
+                d="M 50 20 C 30 18, 16 35, 24 55 C 32 75, 48 84, 50 84 C 52 84, 68 75, 76 55 C 84 35, 70 18, 50 20 Z"
+                fill="none"
+                stroke="#00f0ff"
+                strokeWidth="3.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="drop-shadow-[0_0_6px_#00f0ff]"
+              />
+              {/* Inner accent track line */}
+              <path
+                d="M 50 28 C 36 26, 26 38, 32 54 C 38 68, 48 76, 50 76 C 52 76, 62 68, 68 54 C 74 38, 64 26, 50 28 Z"
+                fill="none"
+                stroke="#ff00e5"
+                strokeWidth="1.2"
+                strokeDasharray="3,3"
+                className="opacity-60"
+              />
+
+              {/* Player dot */}
+              <circle
+                cx={radarPlayerX}
+                cy={radarPlayerY}
+                r="3.5"
+                fill="#ffffff"
+                stroke="#00f0ff"
+                strokeWidth="2"
+                className="animate-pulse drop-shadow-[0_0_8px_#00f0ff]"
+              />
+            </svg>
+
+            {/* Sector Title text inside radar */}
+            <div className="absolute bottom-1.5 text-[8px] font-mono font-bold text-cyan-300 tracking-widest uppercase text-center w-full">
+              {sectorTitle}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ================= SCREEN CENTER ALERTS & COUNTDOWN ================= */}
+      <div className="my-auto flex flex-col items-center justify-center gap-3 text-center pointer-events-none">
+        {/* Race Start Countdown */}
+        {countdown !== null && countdown > 0 && (
+          <div className="animate-ping text-7xl sm:text-9xl font-ui font-black text-cyan-400 drop-shadow-[0_0_35px_#00f0ff]">
+            {countdown}
+          </div>
+        )}
+        {countdown === 0 && (
+          <div className="text-7xl sm:text-9xl font-ui font-black text-emerald-400 drop-shadow-[0_0_35px_#39ff14] animate-bounce">
+            ENGAGE!
+          </div>
+        )}
+
+        {/* Wrong Way Warning Banner */}
+        {isWrongWay && (
+          <div className="px-6 py-3 rounded-2xl bg-rose-600/90 border-2 border-white text-white font-ui font-black text-xl tracking-widest uppercase shadow-[0_0_35px_#ff0055] animate-pulse flex items-center gap-3">
+            <AlertOctagon className="w-7 h-7 animate-bounce" />
+            WRONG WAY! REVERSE COURSE
+          </div>
+        )}
+
+        {/* Destruction & Respawn Alert */}
+        {destroyedMessage && (
+          <div className="p-4 rounded-3xl bg-slate-950/90 border-2 border-rose-500 shadow-[0_0_40px_rgba(244,63,94,0.4)] flex flex-col items-center animate-fadeIn">
+            <div className="text-xl font-ui font-black text-rose-500 uppercase tracking-widest">
+              {destroyedMessage}
+            </div>
+            <div className="text-xs font-mono text-slate-300 mt-1">
+              RECONSTRUCTING HULL IN {respawnTimeRemaining.toFixed(1)}s
+            </div>
+          </div>
+        )}
+
+        {/* Hazard Hit / Deflect Notification */}
+        {hazardHitMessage && (
+          <div className="px-4 py-1.5 rounded-full bg-slate-900/90 border border-cyan-400 text-cyan-300 text-xs font-mono tracking-wider shadow-lg">
+            {hazardHitMessage}
+          </div>
+        )}
+
+        {/* Active Dynamic Hazard Alert Banner */}
+        {activeEvent && (
+          <div className="px-4 py-1.5 rounded-full bg-fuchsia-950/90 border border-fuchsia-400 text-fuchsia-300 text-xs font-mono font-bold tracking-wider shadow-[0_0_15px_rgba(255,0,229,0.4)] flex items-center gap-2 animate-pulse">
+            <AlertTriangle className="w-4 h-4 text-fuchsia-400" />
+            <span>{activeEvent.title}</span>
+          </div>
+        )}
+
+        {/* Milestone Popups */}
+        {milestoneMessage && (
+          <div className="px-5 py-2 rounded-2xl bg-amber-500/20 border border-amber-400 text-amber-300 text-xs font-ui font-black uppercase tracking-wider shadow-[0_0_20px_#ffaa00] animate-bounce">
+            {milestoneMessage}
+          </div>
+        )}
+
+        {/* Shortcut Alert */}
+        {shortcutMessage && (
+          <div className="px-5 py-2 rounded-2xl bg-fuchsia-500/20 border border-fuchsia-400 text-fuchsia-300 text-xs font-ui font-black uppercase tracking-wider shadow-[0_0_20px_#ff00e5] animate-bounce">
+            WARP PASSAGE: {shortcutMessage}
+          </div>
+        )}
+
+        {/* Active Power-Ups Shelf */}
+        {powerUps.length > 0 && (
+          <div className="flex flex-wrap items-center justify-center gap-2 mt-2 max-w-lg">
+            {powerUps.map(p => {
+              let Icon = Zap;
+              let colorClass = 'border-amber-400 text-amber-300 bg-amber-950/80 shadow-[0_0_15px_#ffaa00]';
+              let label = p.type.replace(/_/g, ' ');
+
+              switch (p.type) {
+                case 'NITRO_BOOST':
+                  Icon = Flame;
+                  colorClass = 'border-orange-500 text-orange-300 bg-orange-950/85 shadow-[0_0_15px_#ff5500]';
+                  label = 'NITRO BOOST';
+                  break;
+                case 'ENERGY_SHIELD':
+                case 'PHASE_SHIELD':
+                  Icon = Shield;
+                  colorClass = 'border-cyan-400 text-cyan-300 bg-cyan-950/85 shadow-[0_0_15px_#00f0ff]';
+                  label = 'ENERGY SHIELD';
+                  break;
+                case 'REPAIR_CORE':
+                  Icon = Wrench;
+                  colorClass = 'border-emerald-400 text-emerald-300 bg-emerald-950/85 shadow-[0_0_15px_#39ff14]';
+                  label = 'NANO REPAIR';
+                  break;
+                case 'MAGNET_BOOST':
+                case 'CREDIT_MAGNET':
+                  Icon = Magnet;
+                  colorClass = 'border-fuchsia-400 text-fuchsia-300 bg-fuchsia-950/85 shadow-[0_0_15px_#ff00e5]';
+                  label = 'MAG VORTEX';
+                  break;
+                case 'EMP_PULSE':
+                  Icon = Radio;
+                  colorClass = 'border-blue-400 text-blue-300 bg-blue-950/85 shadow-[0_0_15px_#00e5ff]';
+                  label = 'EMP DISCHARGE';
+                  break;
+                case 'TIME_WARP':
+                  Icon = Hourglass;
+                  colorClass = 'border-purple-400 text-purple-300 bg-purple-950/85 shadow-[0_0_15px_#9d4edd]';
+                  label = 'TIME DILATION';
+                  break;
+                case 'GRAVITY_BURST':
+                  Icon = Anchor;
+                  colorClass = 'border-yellow-400 text-yellow-300 bg-yellow-950/85 shadow-[0_0_15px_#ffcc00]';
+                  label = 'GRAV CLAMP';
+                  break;
+                case 'DECOY_SHIP':
+                  Icon = Copy;
+                  colorClass = 'border-pink-400 text-pink-300 bg-pink-950/85 shadow-[0_0_15px_#ff007f]';
+                  label = 'PHANTOM DECOY';
+                  break;
+                case 'TEMPORARY_SPEED_SURGE':
+                case 'HYPER_BOOST':
+                  Icon = Zap;
+                  colorClass = 'border-rose-400 text-rose-300 bg-rose-950/85 shadow-[0_0_15px_#ff0055]';
+                  label = 'SPEED SURGE';
+                  break;
+              }
+
+              return (
+                <div
+                  key={p.type}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-mono backdrop-blur-md ${colorClass} animate-pulse`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span className="font-bold tracking-wide">{label}</span>
+                  <span className="font-mono font-black opacity-90">{p.remainingTime}s</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ================= BOTTOM CONTROLS & TELEMETRY ================= */}
+      <div className="flex items-end justify-between w-full">
+        {/* Bottom Left: Mode Pill & Steering Joystick */}
+        <div className="flex flex-col items-start pointer-events-auto select-none">
+          {/* Mode Pill */}
+          <div className="mb-2 px-2.5 py-0.5 rounded-full bg-[#060e1b]/90 border border-fuchsia-500/60 text-fuchsia-300 text-[9px] font-mono font-bold tracking-wider flex items-center gap-1 shadow-[0_0_10px_rgba(217,70,239,0.3)]">
+            <span className="text-[10px]">🎛</span>
+            <span>MODE: JOYSTICK</span>
+          </div>
+
+          {/* Virtual Steering Joystick */}
+          <div
+            ref={joystickRef}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-[#040914]/90 border border-cyan-500/40 flex items-center justify-center shadow-[0_0_25px_rgba(0,240,255,0.2)] touch-none cursor-grab active:cursor-grabbing"
+          >
+            {/* Directional Chevrons */}
+            <div className="absolute top-1 text-cyan-500/50 text-xs font-mono font-bold">▲</div>
+            <div className="absolute bottom-1 text-cyan-500/50 text-xs font-mono font-bold">▼</div>
+            <div className="absolute left-1.5 text-cyan-500/50 text-xs font-mono font-bold">◀</div>
+            <div className="absolute right-1.5 text-cyan-500/50 text-xs font-mono font-bold">▶</div>
+
+            {/* Concentric Guide Rings */}
+            <div className="w-20 h-20 sm:w-22 sm:h-22 rounded-full border border-cyan-500/20" />
+            <div className="w-12 h-12 rounded-full border border-cyan-500/30" />
+
+            {/* Movable Thumbstick Knob */}
+            <div
+              className={`absolute w-12 h-12 rounded-full border-2 border-cyan-300 shadow-[0_0_18px_#00f0ff] transition-transform duration-75 flex items-center justify-center ${
+                touchActive
+                  ? 'bg-gradient-to-b from-cyan-400 to-blue-600 scale-95'
+                  : 'bg-gradient-to-b from-cyan-500/85 to-blue-700/85 scale-100'
+              }`}
+              style={{
+                transform: `translate(${stickPos.x}px, ${stickPos.y}px)`,
+              }}
+            >
+              <div className="w-6 h-6 rounded-full border border-cyan-200/60 flex items-center justify-center">
+                <div className="w-2.5 h-2.5 rounded-full bg-cyan-200 shadow-[0_0_6px_#fff]" />
+              </div>
+            </div>
+          </div>
+
+          {/* Joystick Label */}
+          <div className="text-[10px] font-mono font-bold text-cyan-400/90 tracking-widest mt-1.5 pl-1">
+            STEER // JOYSTICK
+          </div>
+        </div>
+
+        {/* Bottom Center: Reset Orientation Button */}
+        <div className="flex flex-col items-center pointer-events-auto select-none mb-1">
+          <button
+            onPointerDown={e => {
+              e.preventDefault();
+              onRecover?.();
+            }}
+            className="w-10 h-10 rounded-xl bg-[#060e1b]/90 border border-slate-700 text-slate-400 hover:text-white active:bg-cyan-500 active:text-slate-950 flex flex-col items-center justify-center shadow-lg transition-all active:scale-95 cursor-pointer"
+            title="Reset Orientation [R]"
+          >
+            <RotateCcw className="w-4 h-4 text-cyan-400" />
+            <span className="text-[7px] font-mono font-bold tracking-wider text-slate-400 mt-0.5 uppercase">
+              RESET
+            </span>
+          </button>
+        </div>
+
+        {/* Bottom Right: Velocity, Boost Fuel, Drift & Boost Buttons */}
+        <div className="flex flex-col items-end pointer-events-auto select-none">
+          {/* Speedometer Digital Readout */}
+          <div className="flex flex-col items-end mb-2">
+            <div className="flex items-baseline">
+              <div className="w-7 h-9 rounded-md bg-cyan-950/90 border-2 border-cyan-400 shadow-[0_0_12px_#00f0ff] flex items-center justify-center text-2xl font-ui font-black text-cyan-300 leading-none">
+                {speed}
+              </div>
+              <span className="text-[10px] font-mono font-bold text-cyan-400 ml-1.5 tracking-wider">
+                KM/H
+              </span>
+            </div>
+            {/* Slanted chevron bars ///// */}
+            <div className="flex items-center gap-1 mt-1 text-xs font-mono font-black select-none tracking-tight">
+              {[0, 1, 2, 3, 4].map(idx => (
+                <span
+                  key={idx}
+                  className={`transition-colors duration-150 ${
+                    speed > idx * 60
+                      ? 'text-cyan-400 drop-shadow-[0_0_5px_#00f0ff]'
+                      : 'text-slate-800'
+                  }`}
+                >
+                  /
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* Boost Fuel Card */}
+          <div className="w-44 sm:w-48 bg-[#050b14]/90 border border-cyan-500/40 rounded-2xl p-2 sm:p-2.5 backdrop-blur-md shadow-[0_0_15px_rgba(0,240,255,0.2)] mb-3">
+            <div className="flex justify-between items-center text-xs font-mono mb-1">
+              <span className="text-[9px] font-mono font-bold text-slate-200 uppercase tracking-wider">
+                BOOST FUEL
+              </span>
+              <span className="text-[11px] font-mono font-black text-fuchsia-400">
+                {Math.round(boost)}%
+              </span>
+            </div>
+            <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800/80 mb-1.5">
+              <div
+                className="h-full bg-gradient-to-r from-fuchsia-500 via-pink-500 to-fuchsia-400 rounded-full shadow-[0_0_10px_#ff00e5] transition-all duration-150"
+                style={{ width: `${Math.max(0, Math.min(100, boost))}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center text-[8px] font-mono font-bold tracking-wider">
+              <span className="text-slate-400 uppercase">THERMAL LOAD</span>
+              <div className="flex items-center gap-1">
+                {[0, 1, 2, 3].map(dotIdx => (
+                  <div
+                    key={dotIdx}
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      speed > 240
+                        ? dotIdx < 3
+                          ? 'bg-amber-400 shadow-[0_0_4px_#ffaa00]'
+                          : 'bg-rose-500 shadow-[0_0_4px_#ff0055]'
+                        : 'bg-cyan-400 shadow-[0_0_4px_#00f0ff]'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Drift & Boost Action Buttons */}
+          <div className="flex items-center gap-3">
+            {/* Drift Button */}
+            <button
+              onPointerDown={e => {
+                e.preventDefault();
+                onInputChange?.({ drift: true });
+              }}
+              onPointerUp={e => {
+                e.preventDefault();
+                onInputChange?.({ drift: false });
+              }}
+              onPointerLeave={() => {
+                onInputChange?.({ drift: false });
+              }}
+              className="w-14 h-14 rounded-full border-2 border-fuchsia-400 bg-fuchsia-950/80 text-fuchsia-300 flex flex-col items-center justify-center shadow-[0_0_20px_rgba(217,70,239,0.4)] active:scale-95 active:bg-fuchsia-500 active:text-slate-950 transition-all cursor-pointer"
+              title="Drift Brake [SHIFT]"
+            >
+              <Wind className="w-5 h-5 mb-0.5" />
+              <span className="text-[9px] font-ui font-black uppercase tracking-wider">
+                DRIFT
+              </span>
+            </button>
+
+            {/* Boost Hold Button */}
+            <button
+              onPointerDown={e => {
+                e.preventDefault();
+                if (boost > 5) onInputChange?.({ boost: true });
+              }}
+              onPointerUp={e => {
+                e.preventDefault();
+                onInputChange?.({ boost: false });
+              }}
+              onPointerLeave={() => {
+                onInputChange?.({ boost: false });
+              }}
+              disabled={boost <= 5}
+              className={`w-16 h-16 rounded-full border-2 flex flex-col items-center justify-center shadow-[0_0_25px_rgba(0,240,255,0.4)] active:scale-95 transition-all cursor-pointer ${
+                speed > 250
+                  ? 'bg-cyan-400 text-slate-950 border-white shadow-[0_0_35px_#00f0ff]'
+                  : boost > 5
+                  ? 'bg-cyan-950/90 border-cyan-400 text-cyan-300 active:bg-cyan-400 active:text-slate-950'
+                  : 'bg-slate-950/60 border-slate-800 text-slate-600'
+              }`}
+              title="Hyper-Boost [SPACE]"
+            >
+              <ChevronsUp className="w-6 h-6 leading-none" />
+              <span className="text-[11px] font-ui font-black uppercase tracking-widest leading-none mt-0.5">
+                BOOST
+              </span>
+              <span className="text-[7px] font-mono font-bold text-cyan-400/80 uppercase tracking-wider leading-none mt-0.5">
+                HOLD
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
