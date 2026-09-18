@@ -5,6 +5,9 @@ import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <main id="main-content" aria-label="Void-Rider 3D space racing game">
+      <h1 className="sr-only">Void-Rider 3D Multiplayer Space Racing</h1>
+      <App />
+    </main>
   </React.StrictMode>
 );
