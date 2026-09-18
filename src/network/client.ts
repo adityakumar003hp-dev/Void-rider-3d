@@ -8,6 +8,8 @@ import {
   ShipDecalType,
   ShipUpgrades,
   TrackId,
+  CustomRoomSettings,
+  MultiplayerMode,
 } from '../types';
 
 export class GameNetworkClient {
@@ -172,7 +174,10 @@ export class GameNetworkClient {
     secondaryColor?: string,
     decal?: ShipDecalType,
     upgrades?: ShipUpgrades,
-    trackId?: TrackId
+    trackId?: TrackId,
+    settings?: CustomRoomSettings,
+    isSpectator?: boolean,
+    team?: 'ALPHA' | 'OMEGA'
   ) {
     this.send({
       type: 'CREATE_ROOM',
@@ -183,6 +188,9 @@ export class GameNetworkClient {
       decal,
       upgrades,
       trackId,
+      settings,
+      isSpectator,
+      team,
     });
   }
 
@@ -193,7 +201,9 @@ export class GameNetworkClient {
     color: string,
     secondaryColor?: string,
     decal?: ShipDecalType,
-    upgrades?: ShipUpgrades
+    upgrades?: ShipUpgrades,
+    isSpectator?: boolean,
+    team?: 'ALPHA' | 'OMEGA'
   ) {
     this.send({
       type: 'JOIN_ROOM',
@@ -204,7 +214,41 @@ export class GameNetworkClient {
       secondaryColor,
       decal,
       upgrades,
+      isSpectator,
+      team,
     });
+  }
+
+  public updateSettings(settings: CustomRoomSettings) {
+    this.send({
+      type: 'UPDATE_SETTINGS',
+      settings,
+    });
+  }
+
+  public setTeam(team: 'ALPHA' | 'OMEGA') {
+    this.send({
+      type: 'SET_TEAM',
+      team,
+    });
+  }
+
+  public setRole(isSpectator: boolean) {
+    this.send({
+      type: 'SET_ROLE',
+      isSpectator,
+    });
+  }
+
+  public async fetchPublicRooms(): Promise<any[]> {
+    try {
+      const res = await fetch('/api/rooms');
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.rooms || [];
+    } catch {
+      return [];
+    }
   }
 
   public quickMatch(
@@ -214,7 +258,8 @@ export class GameNetworkClient {
     secondaryColor?: string,
     decal?: ShipDecalType,
     upgrades?: ShipUpgrades,
-    trackId?: TrackId
+    trackId?: TrackId,
+    mode?: MultiplayerMode
   ) {
     this.send({
       type: 'QUICK_MATCH',
@@ -225,6 +270,7 @@ export class GameNetworkClient {
       decal,
       upgrades,
       trackId,
+      mode,
     });
   }
 

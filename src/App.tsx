@@ -27,6 +27,8 @@ import {
   TrackId,
   UpgradeType,
   ShipDamageZones,
+  CustomRoomSettings,
+  MultiplayerMode,
 } from './types';
 import { MainMenu } from './components/MainMenu';
 import { LobbyView } from './components/LobbyView';
@@ -43,6 +45,7 @@ import { GameModeSelectModal } from './components/GameModeSelectModal';
 import { AIRaceModal } from './components/AIRaceModal';
 import { SpaceHubModal } from './components/SpaceHubModal';
 import { StoryUniverseModal } from './components/StoryUniverseModal';
+import { MultiplayerModal } from './components/MultiplayerModal';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -108,6 +111,8 @@ export default function App() {
   const [isAIRaceModalOpen, setIsAIRaceModalOpen] = useState<boolean>(false);
   const [isSpaceHubOpen, setIsSpaceHubOpen] = useState<boolean>(false);
   const [isStoryOpen, setIsStoryOpen] = useState<boolean>(false);
+  const [isMultiplayerModalOpen, setIsMultiplayerModalOpen] = useState<boolean>(false);
+  const [spectatorTargetName, setSpectatorTargetName] = useState<string>('');
   const [damageZones, setDamageZones] = useState<ShipDamageZones>({
     frontHull: 0,
     rearEngine: 0,
@@ -201,6 +206,7 @@ export default function App() {
       },
       onCameraModeChange: mode => setCameraMode(mode),
       onDamageZonesUpdate: zones => setDamageZones(zones),
+      onSpectatorTargetChange: name => setSpectatorTargetName(name),
     });
 
     engine.setPlayerShip(
@@ -229,8 +235,17 @@ export default function App() {
 
     networkClient.onRoomUpdate = room => {
       setCurrentRoom(room);
-      if (engineRef.current && room.trackId !== engineRef.current.trackId) {
-        engineRef.current.setTrack(room.trackId);
+      if (engineRef.current) {
+        if (room.trackId && room.trackId !== engineRef.current.trackId) {
+          engineRef.current.setTrack(room.trackId);
+        }
+        if (room.settings) {
+          engineRef.current.collisionsEnabled = room.settings.collisionsEnabled ?? true;
+          engineRef.current.powerUpsEnabled = room.settings.powerUpsEnabled ?? true;
+          engineRef.current.damageMode = room.settings.damageMode ?? 'CASUAL';
+        }
+        const me = networkClient.playerId ? room.players[networkClient.playerId] : null;
+        engineRef.current.isSpectator = me?.isSpectator ?? false;
       }
     };
 
@@ -252,6 +267,16 @@ export default function App() {
       setIsPauseOpen(false);
 
       if (engineRef.current) {
+        if (room.trackId && room.trackId !== engineRef.current.trackId) {
+          engineRef.current.setTrack(room.trackId);
+        }
+        if (room.settings) {
+          engineRef.current.collisionsEnabled = room.settings.collisionsEnabled ?? true;
+          engineRef.current.powerUpsEnabled = room.settings.powerUpsEnabled ?? true;
+          engineRef.current.damageMode = room.settings.damageMode ?? 'CASUAL';
+        }
+        const me = networkClient.playerId ? room.players[networkClient.playerId] : null;
+        engineRef.current.isSpectator = me?.isSpectator ?? false;
         engineRef.current.startRace();
       }
     };
@@ -421,7 +446,7 @@ export default function App() {
   };
 
   // 5. User Interaction Actions
-  const handleQuickMatch = () => {
+  const handleQuickMatch = (mode?: MultiplayerMode) => {
     sound.playMenuClick();
     networkClient.quickMatch(
       progression.playerName,
@@ -429,12 +454,18 @@ export default function App() {
       currentColor,
       currentSecondaryColor,
       currentDecal,
-      currentUpgrades
+      currentUpgrades,
+      undefined,
+      mode
     );
     setAppState('LOBBY');
   };
 
-  const handleCreateRoom = () => {
+  const handleCreateRoom = (
+    settings?: CustomRoomSettings,
+    isSpectator: boolean = false,
+    team: 'ALPHA' | 'OMEGA' = 'ALPHA'
+  ) => {
     sound.playMenuClick();
     networkClient.createRoom(
       progression.playerName,
@@ -442,23 +473,33 @@ export default function App() {
       currentColor,
       currentSecondaryColor,
       currentDecal,
-      currentUpgrades
+      currentUpgrades,
+      settings?.trackId,
+      settings,
+      isSpectator,
+      team
     );
     setAppState('LOBBY');
   };
 
-  const handleJoinRoom = () => {
-    const code = prompt('ENTER 6-CHARACTER WARP SECTOR CODE:');
-    if (code && code.trim()) {
+  const handleJoinRoom = (
+    code?: string,
+    isSpectator: boolean = false,
+    team: 'ALPHA' | 'OMEGA' = 'ALPHA'
+  ) => {
+    const targetCode = code || prompt('ENTER 6-CHARACTER WARP SECTOR CODE:');
+    if (targetCode && targetCode.trim()) {
       sound.playMenuClick();
       networkClient.joinRoom(
-        code.trim().toUpperCase(),
+        targetCode.trim().toUpperCase(),
         progression.playerName,
         currentShipId,
         currentColor,
         currentSecondaryColor,
         currentDecal,
-        currentUpgrades
+        currentUpgrades,
+        isSpectator,
+        team
       );
       setAppState('LOBBY');
     }
@@ -683,6 +724,7 @@ export default function App() {
           onQuickMatch={handleQuickMatch}
           onOpenCreateRoom={handleCreateRoom}
           onOpenJoinRoom={handleJoinRoom}
+          onOpenMultiplayer={() => setIsMultiplayerModalOpen(true)}
           onOpenAIRace={() => setIsAIRaceModalOpen(true)}
           onOpenGameModes={() => setIsGameModesOpen(true)}
           onOpenGarage={() => setAppState('GARAGE')}
@@ -750,6 +792,18 @@ export default function App() {
             setAppState('MAIN_MENU');
           }}
           onOpenGarage={() => setAppState('GARAGE')}
+          onToggleTeam={() => {
+            const me = currentRoom.players?.[networkClient.playerId];
+            const nextTeam = me?.team === 'ALPHA' ? 'OMEGA' : 'ALPHA';
+            networkClient.setTeam(nextTeam);
+          }}
+          onToggleRole={() => {
+            const me = currentRoom.players?.[networkClient.playerId];
+            networkClient.setRole(!me?.isSpectator);
+          }}
+          onUpdateSettings={settings => {
+            networkClient.updateSettings(settings);
+          }}
         />
       )}
 
@@ -781,6 +835,9 @@ export default function App() {
           cameraMode={cameraMode}
           trackId={engineRef.current?.trackId || 'circuit_alpha'}
           damageZones={damageZones}
+          isSpectator={engineRef.current?.isSpectator}
+          spectatorTargetName={spectatorTargetName}
+          onNextSpectatorTarget={() => engineRef.current?.cycleSpectatorTarget()}
           onTogglePause={handleTogglePause}
           onToggleCamera={() => {
             if (engineRef.current) {
@@ -1000,6 +1057,24 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Advanced Real-Time Multiplayer Modal */}
+      <MultiplayerModal
+        isOpen={isMultiplayerModalOpen}
+        onClose={() => setIsMultiplayerModalOpen(false)}
+        onQuickMatch={mode => {
+          setIsMultiplayerModalOpen(false);
+          handleQuickMatch(mode);
+        }}
+        onCreateRoom={(settings, isSpectator, team) => {
+          setIsMultiplayerModalOpen(false);
+          handleCreateRoom(settings, isSpectator, team);
+        }}
+        onJoinRoomCode={(code, isSpectator, team) => {
+          setIsMultiplayerModalOpen(false);
+          handleJoinRoom(code, isSpectator, team);
+        }}
+      />
     </div>
   );
 }

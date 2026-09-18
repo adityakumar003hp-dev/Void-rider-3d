@@ -39,6 +39,7 @@ export interface PowerUpPod {
 }
 
 export interface Obstacle {
+  id: number;
   position: THREE.Vector3;
   radius: number;
   rotationSpeed: THREE.Vector3;
@@ -46,6 +47,14 @@ export interface Obstacle {
   basePosition?: THREE.Vector3;
   driftVelocity?: THREE.Vector3;
   currentRotation?: THREE.Vector3;
+  // Asteroid health and destruction system
+  type: 'SMALL' | 'MEDIUM' | 'LARGE' | 'ARMORED' | 'ENERGY';
+  health: number;
+  maxHealth: number;
+  isDestroyed: boolean;
+  crackLevel: number; // 0 to 1
+  respawnTimer: number;
+  hitFlashTimer?: number;
 }
 
 export interface EnergyBarrier {
@@ -457,6 +466,7 @@ export class CosmicTrack {
       swarmCount = 4;
     }
 
+    let obstacleIdCounter = 0;
     for (let i = 0; i < obstacleCount; i++) {
       const t = (i + 0.3) / obstacleCount;
       const sample = this.getSampleAt(t);
@@ -465,14 +475,38 @@ export class CosmicTrack {
       const pos = sample.point.clone().add(sample.binormal.clone().multiplyScalar(offsetSign * offsetDist));
       pos.y += (Math.random() - 0.5) * 6;
 
+      const radius = 2.4 + Math.random() * 3.6;
+      let astType: 'SMALL' | 'MEDIUM' | 'LARGE' | 'ARMORED' | 'ENERGY' = 'MEDIUM';
+      let hp = 80;
+      if (i % 7 === 0) {
+        astType = 'ENERGY';
+        hp = 90;
+      } else if (i % 5 === 0) {
+        astType = 'ARMORED';
+        hp = 220;
+      } else if (radius < 3.2) {
+        astType = 'SMALL';
+        hp = 40;
+      } else if (radius > 4.6) {
+        astType = 'LARGE';
+        hp = 150;
+      }
+
       this.obstacles.push({
+        id: obstacleIdCounter++,
         position: pos,
-        radius: 3.2 + Math.random() * 2.8,
+        radius,
         rotationSpeed: new THREE.Vector3(
           (Math.random() - 0.5) * 0.02,
           (Math.random() - 0.5) * 0.02,
           (Math.random() - 0.5) * 0.02
         ),
+        type: astType,
+        health: hp,
+        maxHealth: hp,
+        isDestroyed: false,
+        crackLevel: 0,
+        respawnTimer: 0,
       });
     }
 
@@ -485,10 +519,16 @@ export class CosmicTrack {
       const basePos = sample.point.clone().add(sample.binormal.clone().multiplyScalar(lateral));
       basePos.y += 1.5 + (Math.random() - 0.5) * 4;
 
+      const radius = 2.2 + Math.random() * 2.8;
+      const astType: 'SMALL' | 'MEDIUM' | 'LARGE' | 'ARMORED' | 'ENERGY' =
+        i % 4 === 0 ? 'ENERGY' : radius < 3.0 ? 'SMALL' : 'MEDIUM';
+      const hp = astType === 'ENERGY' ? 85 : astType === 'SMALL' ? 40 : 80;
+
       this.obstacles.push({
+        id: obstacleIdCounter++,
         position: basePos.clone(),
         basePosition: basePos,
-        radius: 2.8 + Math.random() * 2.2,
+        radius,
         rotationSpeed: new THREE.Vector3(
           (Math.random() - 0.5) * 0.04,
           (Math.random() - 0.5) * 0.04,
@@ -500,6 +540,12 @@ export class CosmicTrack {
           (Math.random() - 0.5) * 3,
           (Math.random() - 0.5) * 6
         ),
+        type: astType,
+        health: hp,
+        maxHealth: hp,
+        isDestroyed: false,
+        crackLevel: 0,
+        respawnTimer: 0,
       });
     }
   }

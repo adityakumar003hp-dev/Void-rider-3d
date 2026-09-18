@@ -1,12 +1,13 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Zap, Shield, RotateCcw, Flame } from 'lucide-react';
-import { PlayerInput } from '../types';
+import { Zap, Shield, RotateCcw, Flame, Crosshair, Sparkles } from 'lucide-react';
+import { PlayerInput, BeamTelemetry } from '../types';
 
 interface MobileControlsProps {
   onInputChange: (input: Partial<PlayerInput>) => void;
   onRecover: () => void;
   isBoosting: boolean;
   boostEnergy: number;
+  beamTelemetry?: BeamTelemetry | null;
 }
 
 export const MobileControls: React.FC<MobileControlsProps> = ({
@@ -14,6 +15,7 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
   onRecover,
   isBoosting,
   boostEnergy,
+  beamTelemetry,
 }) => {
   const [touchActive, setTouchActive] = useState(false);
   const [stickPos, setStickPos] = useState({ x: 0, y: 0 });
@@ -137,6 +139,74 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
         >
           <Flame className="w-5 h-5 mb-0.5" />
           <span className="text-[10px] font-ui font-black uppercase tracking-wider">DRIFT</span>
+        </button>
+
+        {/* Asteroid Destruction Beam Button */}
+        <button
+          onTouchStart={e => {
+            e.preventDefault();
+            if (!beamTelemetry?.isOverheated && (beamTelemetry?.energy ?? 100) > 3) {
+              onInputChange({ fireBeam: true });
+            }
+          }}
+          onTouchEnd={e => {
+            e.preventDefault();
+            onInputChange({ fireBeam: false });
+          }}
+          onTouchCancel={e => {
+            e.preventDefault();
+            onInputChange({ fireBeam: false });
+          }}
+          disabled={beamTelemetry?.isOverheated || (beamTelemetry?.energy ?? 100) <= 3}
+          className={`relative w-20 h-20 rounded-3xl border-2 flex flex-col items-center justify-center shadow-[0_0_25px_rgba(255,0,85,0.4)] transition-all overflow-hidden active:scale-95 ${
+            beamTelemetry?.isFiring
+              ? 'bg-rose-500 text-slate-950 border-white shadow-[0_0_35px_#ff0055] scale-95 ring-4 ring-rose-400/50'
+              : beamTelemetry?.isOverheated
+              ? 'bg-rose-950/40 border-rose-900 text-rose-700/60 opacity-60 cursor-not-allowed'
+              : (beamTelemetry?.energy ?? 100) <= 3
+              ? 'bg-slate-950/60 border-slate-800 text-slate-600 cursor-not-allowed'
+              : 'bg-rose-950/85 border-rose-500 text-rose-300 active:bg-rose-500 active:text-slate-950'
+          }`}
+          title="Front Asteroid Destruction Beam"
+        >
+          {/* Energy level meter bar along button bottom */}
+          <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-slate-900/90">
+            <div
+              className={`h-full transition-all duration-75 ${
+                beamTelemetry?.isOverheated ? 'bg-rose-600 animate-pulse' : 'bg-rose-400'
+              }`}
+              style={{ width: `${Math.max(0, Math.min(100, beamTelemetry?.energy ?? 100))}%` }}
+            />
+          </div>
+
+          {/* Overheat Cooldown Overlay */}
+          {beamTelemetry?.isOverheated && (
+            <div className="absolute inset-0 bg-rose-950/95 flex flex-col items-center justify-center p-1 z-10">
+              <span className="text-[8px] font-mono font-black text-rose-400 uppercase tracking-tight animate-pulse">
+                OVERHEAT
+              </span>
+              <span className="text-[10px] font-mono font-bold text-white">
+                {beamTelemetry.cooldownRemaining.toFixed(1)}s
+              </span>
+            </div>
+          )}
+
+          {/* Target lock indicator badge on button */}
+          {beamTelemetry?.hasTargetLock && !beamTelemetry.isOverheated && (
+            <div className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#39ff14] animate-ping" />
+          )}
+
+          <Zap
+            className={`w-7 h-7 mb-0.5 ${
+              beamTelemetry?.isFiring ? 'animate-bounce text-white drop-shadow-[0_0_10px_#fff]' : ''
+            }`}
+          />
+          <span className="text-[11px] font-ui font-black uppercase tracking-widest leading-none">
+            ⚡ BEAM
+          </span>
+          <span className="text-[8px] font-mono font-bold opacity-80 leading-none mt-0.5">
+            {Math.round(beamTelemetry?.energy ?? 100)}%
+          </span>
         </button>
 
         {/* Hyper-Boost Button */}

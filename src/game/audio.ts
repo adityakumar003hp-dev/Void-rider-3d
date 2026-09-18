@@ -48,277 +48,6 @@ class SoundSystem {
     this.playCountdown(true);
   }
 
-  // Active countdown state and cancellation handles
-  private countdownTimeouts: any[] = [];
-  public isCountdownActive: boolean = false;
-  private activeCountdownNodes: { stop: () => void }[] = [];
-
-  /**
-   * Cancel and immediately silence the 3-2-1-GO voice-over sequence
-   * if the race is cancelled, aborted, paused, or restarted.
-   */
-  public cancelCountdownSequence() {
-    this.isCountdownActive = false;
-
-    // Clear all scheduled timeouts
-    if (this.countdownTimeouts.length > 0) {
-      this.countdownTimeouts.forEach(t => clearTimeout(t));
-      this.countdownTimeouts = [];
-    }
-
-    // Immediately stop any active Web Speech synthesis utterances
-    try {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
-    } catch {
-      // Ignore speech cancel exceptions
-    }
-
-    // Immediately stop any active procedural oscillator nodes
-    for (const node of this.activeCountdownNodes) {
-      try {
-        node.stop();
-      } catch {}
-    }
-    this.activeCountdownNodes = [];
-  }
-
-  public stopCountdown() {
-    this.cancelCountdownSequence();
-  }
-
-  /**
-   * Procedural vocal formant synthesizer fallback creating a gritty,
-   * high-energy cybernetic voice for "THREE", "TWO", "ONE", "GO!".
-   */
-  private playCyberVoiceFormant(word: 'THREE' | 'TWO' | 'ONE' | 'GO', durationMs: number = 420) {
-    if (!this.ctx || !this.sfxEnabled) return;
-    try {
-      const now = this.ctx.currentTime;
-      const dur = durationMs / 1000;
-
-      // Vocal tract carrier (sawtooth wave with pitch micro-vibrato)
-      const carrier = this.ctx.createOscillator();
-      carrier.type = 'sawtooth';
-
-      const baseFreq = word === 'THREE' ? 175 : word === 'TWO' ? 190 : word === 'ONE' ? 210 : 255;
-      carrier.frequency.setValueAtTime(baseFreq, now);
-      carrier.frequency.exponentialRampToValueAtTime(
-        word === 'GO' ? baseFreq * 1.35 : baseFreq * 0.95,
-        now + dur
-      );
-
-      // Formant filters F1 and F2 to shape vowels
-      let f1Freq = 600;
-      let f2Freq = 1400;
-      if (word === 'THREE') {
-        f1Freq = 300;
-        f2Freq = 2200;
-      } else if (word === 'TWO') {
-        f1Freq = 380;
-        f2Freq = 950;
-      } else if (word === 'ONE') {
-        f1Freq = 580;
-        f2Freq = 1150;
-      } else if (word === 'GO') {
-        f1Freq = 520;
-        f2Freq = 900;
-      }
-
-      const f1 = this.ctx.createBiquadFilter();
-      f1.type = 'bandpass';
-      f1.frequency.setValueAtTime(f1Freq, now);
-      f1.Q.setValueAtTime(6.0, now);
-
-      const f2 = this.ctx.createBiquadFilter();
-      f2.type = 'bandpass';
-      f2.frequency.setValueAtTime(f2Freq, now);
-      f2.Q.setValueAtTime(7.5, now);
-
-      const voiceGain = this.ctx.createGain();
-      const peakVol = (word === 'GO' ? 0.32 : 0.22) * this.volume;
-      voiceGain.gain.setValueAtTime(0.001, now);
-      voiceGain.gain.linearRampToValueAtTime(peakVol, now + 0.04);
-      voiceGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
-
-      carrier.connect(f1);
-      carrier.connect(f2);
-      f1.connect(voiceGain);
-      f2.connect(voiceGain);
-      voiceGain.connect(this.ctx.destination);
-
-      carrier.start(now);
-      carrier.stop(now + dur + 0.05);
-
-      const stopHandle = {
-        stop: () => {
-          try {
-            voiceGain.gain.setValueAtTime(0, this.ctx?.currentTime || 0);
-            carrier.stop();
-            carrier.disconnect();
-          } catch {}
-        },
-      };
-      this.activeCountdownNodes.push(stopHandle);
-      setTimeout(() => {
-        const idx = this.activeCountdownNodes.indexOf(stopHandle);
-        if (idx !== -1) this.activeCountdownNodes.splice(idx, 1);
-      }, durationMs + 80);
-    } catch {
-      // Fallback
-    }
-  }
-
-  /**
-   * Plays a single high-energy countdown step (3, 2, 1, or 0 / GO)
-   * with robotic cyber-announcer vocalization and punchy synth chords.
-   */
-  public playCountdownStep(count: number) {
-    this.initContext();
-    if (!this.sfxEnabled) return;
-
-    const isGo = count <= 0;
-    const word = count === 3 ? 'THREE' : count === 2 ? 'TWO' : count === 1 ? 'ONE' : 'GO';
-
-    // 1. Web Speech API Announcer (high-energy, crisp delivery)
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-        const text = isGo ? 'GO!' : `${count}!`;
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = isGo ? 1.35 : 1.25;
-        utterance.pitch = count === 3 ? 1.15 : count === 2 ? 1.28 : count === 1 ? 1.38 : 1.55;
-        utterance.volume = Math.min(1.0, 0.9 * this.volume);
-
-        const voices = window.speechSynthesis.getVoices();
-        const preferredVoice = voices.find(
-          v =>
-            v.lang.startsWith('en') &&
-            (v.name.includes('Natural') ||
-              v.name.includes('Google') ||
-              v.name.includes('Samantha') ||
-              v.name.includes('Daniel') ||
-              v.name.includes('Karen'))
-        );
-        if (preferredVoice) {
-          utterance.voice = preferredVoice;
-        }
-
-        window.speechSynthesis.speak(utterance);
-      } catch (err) {
-        console.debug('Speech synthesis fallback:', err);
-      }
-    }
-
-    // 2. Procedural cyber voice formant backing
-    this.playCyberVoiceFormant(word, isGo ? 650 : 380);
-
-    // 3. High-energy musical countdown synth riser and bass drop
-    if (this.ctx) {
-      try {
-        const now = this.ctx.currentTime;
-
-        // Punchy sub-bass transient
-        const subOsc = this.ctx.createOscillator();
-        const subGain = this.ctx.createGain();
-        subOsc.type = 'sine';
-
-        const startSub = isGo ? 120 : 65 + (3 - count) * 15;
-        const endSub = isGo ? 36 : 40;
-        subOsc.frequency.setValueAtTime(startSub, now);
-        subOsc.frequency.exponentialRampToValueAtTime(endSub, now + (isGo ? 0.6 : 0.28));
-
-        const subVol = (isGo ? 0.35 : 0.22) * this.volume;
-        subGain.gain.setValueAtTime(subVol, now);
-        subGain.gain.exponentialRampToValueAtTime(0.001, now + (isGo ? 0.65 : 0.3));
-
-        subOsc.connect(subGain);
-        subGain.connect(this.ctx.destination);
-        subOsc.start(now);
-        subOsc.stop(now + (isGo ? 0.7 : 0.32));
-
-        // Melodic tension chords (E -> G -> B -> E hyper blast)
-        const rootFreq = count === 3 ? 440 : count === 2 ? 554.37 : count === 1 ? 659.25 : 880;
-        const harmonies = isGo ? [880, 1320, 1760, 2640] : [rootFreq, rootFreq * 1.5];
-
-        harmonies.forEach((freq, idx) => {
-          if (!this.ctx) return;
-          const osc = this.ctx.createOscillator();
-          const gain = this.ctx.createGain();
-          osc.type = isGo ? 'sawtooth' : 'triangle';
-          osc.frequency.setValueAtTime(freq, now);
-
-          if (isGo) {
-            osc.frequency.exponentialRampToValueAtTime(freq * 1.25, now + 0.35);
-          }
-
-          const vol = ((isGo ? 0.14 : 0.1) / (idx + 1)) * this.volume;
-          gain.gain.setValueAtTime(vol, now);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + (isGo ? 0.8 : 0.35));
-
-          osc.connect(gain);
-          gain.connect(this.ctx.destination);
-          osc.start(now);
-          osc.stop(now + (isGo ? 0.85 : 0.38));
-
-          const stopHandle = {
-            stop: () => {
-              try {
-                gain.gain.setValueAtTime(0, this.ctx?.currentTime || 0);
-                osc.stop();
-                osc.disconnect();
-              } catch {}
-            },
-          };
-          this.activeCountdownNodes.push(stopHandle);
-          setTimeout(() => {
-            const i = this.activeCountdownNodes.indexOf(stopHandle);
-            if (i !== -1) this.activeCountdownNodes.splice(i, 1);
-          }, 900);
-        });
-      } catch {
-        // Fallback
-      }
-    }
-  }
-
-  /**
-   * Starts a high-energy distinct 3-2-1-GO countdown sequence
-   * with callbacks for each tick and completion.
-   * Cancels any currently running countdown first to avoid overlapping.
-   */
-  public startCountdownSequence(options?: {
-    onTick?: (count: number) => void;
-    onGo?: () => void;
-    onComplete?: () => void;
-  }) {
-    this.cancelCountdownSequence();
-    this.isCountdownActive = true;
-
-    const steps = [3, 2, 1, 0];
-    steps.forEach((step, idx) => {
-      const delay = idx * 1000;
-      const t = setTimeout(() => {
-        if (!this.isCountdownActive) return;
-
-        this.playCountdownStep(step);
-        options?.onTick?.(step);
-
-        if (step === 0) {
-          options?.onGo?.();
-          setTimeout(() => {
-            if (this.isCountdownActive) {
-              this.isCountdownActive = false;
-              options?.onComplete?.();
-            }
-          }, 1200);
-        }
-      }, delay);
-      this.countdownTimeouts.push(t);
-    });
-  }
-
   public playUpgradePurchase() {
     this.playUpgradeUnlock();
   }
@@ -754,6 +483,26 @@ class SoundSystem {
     osc.stop(now + 0.26);
   }
 
+  public playShieldHit() {
+    this.initContext();
+    if (!this.ctx || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(520, now);
+    osc.frequency.exponentialRampToValueAtTime(110, now + 0.18);
+
+    gain.gain.setValueAtTime(0.25 * this.volume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.22);
+  }
+
   public playMagnetPulse() {
     this.initContext();
     if (!this.ctx || !this.sfxEnabled) return;
@@ -1071,9 +820,291 @@ class SoundSystem {
       this.musicInterval = null;
     }
   }
+
+  // ================= ASTEROID DESTRUCTION BEAM AUDIO =================
+  private beamHumOsc: OscillatorNode | null = null;
+  private beamHumGain: GainNode | null = null;
+  private beamHumFilter: BiquadFilterNode | null = null;
+
+  public playBeamCharge() {
+    this.initContext();
+    if (!this.ctx || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(220, now);
+    osc.frequency.exponentialRampToValueAtTime(880, now + 0.18);
+
+    gain.gain.setValueAtTime(0.12 * this.volume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.22);
+  }
+
+  public playBeamFire(type: string = 'STANDARD', soundPreset?: string) {
+    this.initContext();
+    if (!this.ctx || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    const filter = this.ctx.createBiquadFilter();
+
+    if (soundPreset === 'HEAVY_PLASMA' || type === 'PLASMA') {
+      osc.type = 'sawtooth';
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(450, now);
+      osc.frequency.setValueAtTime(140, now);
+      osc.frequency.exponentialRampToValueAtTime(85, now + 0.28);
+      gain.gain.setValueAtTime(0.26 * this.volume, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+    } else if (soundPreset === 'RESONANT_LASER' || type === 'LASER') {
+      osc.type = 'triangle';
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(1200, now);
+      osc.frequency.setValueAtTime(1100, now);
+      osc.frequency.exponentialRampToValueAtTime(650, now + 0.22);
+      gain.gain.setValueAtTime(0.22 * this.volume, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+    } else if (soundPreset === 'VOID_SURGE' || type === 'VOID') {
+      osc.type = 'sawtooth';
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(320, now);
+      osc.frequency.setValueAtTime(95, now);
+      osc.frequency.linearRampToValueAtTime(180, now + 0.2);
+      gain.gain.setValueAtTime(0.28 * this.volume, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+    } else if (soundPreset === 'ARC_DISCHARGE' || type === 'ARC') {
+      osc.type = 'square';
+      filter.type = 'highpass';
+      filter.frequency.setValueAtTime(600, now);
+      osc.frequency.setValueAtTime(820, now);
+      osc.frequency.exponentialRampToValueAtTime(240, now + 0.18);
+      gain.gain.setValueAtTime(0.24 * this.volume, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+    } else {
+      // High energy pulse / standard / quantum
+      osc.type = 'sawtooth';
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(800, now);
+      osc.frequency.setValueAtTime(680, now);
+      osc.frequency.exponentialRampToValueAtTime(280, now + 0.24);
+      gain.gain.setValueAtTime(0.22 * this.volume, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    }
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.35);
+  }
+
+  public startBeamHum(soundPreset?: string) {
+    this.initContext();
+    if (!this.ctx || !this.sfxEnabled) return;
+    if (this.beamHumOsc) return;
+
+    try {
+      this.beamHumOsc = this.ctx.createOscillator();
+      this.beamHumFilter = this.ctx.createBiquadFilter();
+      this.beamHumGain = this.ctx.createGain();
+
+      this.beamHumOsc.type = soundPreset === 'HEAVY_PLASMA' ? 'sawtooth' : 'triangle';
+      const baseFreq = soundPreset === 'RESONANT_LASER' ? 520 : soundPreset === 'VOID_SURGE' ? 110 : 280;
+      this.beamHumOsc.frequency.setValueAtTime(baseFreq, this.ctx.currentTime);
+
+      this.beamHumFilter.type = 'bandpass';
+      this.beamHumFilter.frequency.setValueAtTime(800, this.ctx.currentTime);
+      this.beamHumFilter.Q.setValueAtTime(3.0, this.ctx.currentTime);
+
+      this.beamHumGain.gain.setValueAtTime(0.08 * this.volume, this.ctx.currentTime);
+
+      this.beamHumOsc.connect(this.beamHumFilter);
+      this.beamHumFilter.connect(this.beamHumGain);
+      this.beamHumGain.connect(this.ctx.destination);
+
+      this.beamHumOsc.start();
+    } catch (e) {
+      // Ignore audio start errors
+    }
+  }
+
+  public stopBeamHum() {
+    if (this.beamHumOsc && this.ctx) {
+      try {
+        this.beamHumGain?.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
+        setTimeout(() => {
+          this.beamHumOsc?.stop();
+          this.beamHumOsc?.disconnect();
+          this.beamHumOsc = null;
+          this.beamHumGain = null;
+          this.beamHumFilter = null;
+        }, 60);
+      } catch (e) {
+        this.beamHumOsc = null;
+      }
+    }
+  }
+
+  public playBeamImpact(impactPreset?: string) {
+    this.initContext();
+    if (!this.ctx || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    if (impactPreset === 'CRYSTAL_SHATTER' || impactPreset === 'QUANTUM_FRACTURE') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1400, now);
+      osc.frequency.exponentialRampToValueAtTime(300, now + 0.15);
+      gain.gain.setValueAtTime(0.18 * this.volume, now);
+    } else if (impactPreset === 'PLASMA_EXPLOSION' || impactPreset === 'FIREBALL') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(180, now);
+      osc.frequency.exponentialRampToValueAtTime(45, now + 0.22);
+      gain.gain.setValueAtTime(0.22 * this.volume, now);
+    } else {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(480, now);
+      osc.frequency.exponentialRampToValueAtTime(90, now + 0.16);
+      gain.gain.setValueAtTime(0.19 * this.volume, now);
+    }
+
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.22);
+  }
+
+  public playAsteroidHitCrack() {
+    this.initContext();
+    if (!this.ctx || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(750, now);
+    osc.frequency.exponentialRampToValueAtTime(180, now + 0.12);
+
+    gain.gain.setValueAtTime(0.16 * this.volume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.15);
+  }
+
+  public playAsteroidDestroy(size: string = 'MEDIUM') {
+    this.initContext();
+    if (!this.ctx || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+
+    // Dual layered explosion: Low sub-bass thud + high resonance shatter
+    const oscSub = this.ctx.createOscillator();
+    const gainSub = this.ctx.createGain();
+    oscSub.type = 'sawtooth';
+
+    const baseF = size === 'LARGE' ? 95 : size === 'ARMORED' ? 120 : size === 'ENERGY' ? 240 : 150;
+    oscSub.frequency.setValueAtTime(baseF, now);
+    oscSub.frequency.exponentialRampToValueAtTime(25, now + 0.45);
+
+    gainSub.gain.setValueAtTime(0.35 * this.volume, now);
+    gainSub.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+
+    oscSub.connect(gainSub);
+    gainSub.connect(this.ctx.destination);
+    oscSub.start(now);
+    oscSub.stop(now + 0.52);
+
+    // High crystalline/debris crackle
+    const oscHigh = this.ctx.createOscillator();
+    const gainHigh = this.ctx.createGain();
+    oscHigh.type = size === 'ENERGY' ? 'sine' : 'square';
+    oscHigh.frequency.setValueAtTime(size === 'ENERGY' ? 980 : 620, now + 0.04);
+    oscHigh.frequency.exponentialRampToValueAtTime(80, now + 0.32);
+
+    gainHigh.gain.setValueAtTime(0.24 * this.volume, now + 0.04);
+    gainHigh.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+    oscHigh.connect(gainHigh);
+    gainHigh.connect(this.ctx.destination);
+    oscHigh.start(now + 0.04);
+    oscHigh.stop(now + 0.36);
+  }
+
+  public playBeamOverheat() {
+    this.initContext();
+    if (!this.ctx || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+
+    // Sizzling warning alarm tone
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(920, now);
+    osc.frequency.setValueAtTime(680, now + 0.1);
+    osc.frequency.setValueAtTime(920, now + 0.2);
+
+    gain.gain.setValueAtTime(0.25 * this.volume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.35);
+  }
+
+  public playBeamCooldownReady() {
+    this.initContext();
+    if (!this.ctx || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+
+    // High pitch chime indicating recharge ready
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, now); // D5
+    osc.frequency.setValueAtTime(880.00, now + 0.08); // A5
+
+    gain.gain.setValueAtTime(0.18 * this.volume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.32);
+  }
+
+  public playTargetLocked() {
+    this.initContext();
+    if (!this.ctx || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1046.50, now); // C6
+    osc.frequency.setValueAtTime(1318.51, now + 0.06); // E6
+
+    gain.gain.setValueAtTime(0.14 * this.volume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.22);
+  }
 }
 
 export const sound = new SoundSystem();
 export const soundSystem = sound;
-export const audioManager = sound;
-export { SoundSystem as AudioManager };

@@ -560,6 +560,7 @@ export function saveLeaderboardEntry(entry: LeaderboardEntry) {
 }
 
 import { PlayerProgression, MissionItem, AchievementItem } from '../types';
+import { DEFAULT_BEAM_CUSTOMIZATION, DEFAULT_BEAM_UPGRADES } from './beamSystem';
 
 export function generateDailyMissions(): MissionItem[] {
   return [
@@ -583,11 +584,11 @@ export function generateDailyMissions(): MissionItem[] {
     },
     {
       id: 'dm_3',
-      title: 'ASTEROID DODGER',
-      description: 'Evade 15 kinetic asteroid hazards across sector tunnels.',
-      rewardCredits: 400,
+      title: 'ASTEROID HARVEST',
+      description: 'Demolish 8 kinetic asteroids using front-mounted energy beam.',
+      rewardCredits: 650,
       progress: 0,
-      target: 15,
+      target: 8,
       claimed: false,
     },
   ];
@@ -608,6 +609,24 @@ export const INITIAL_ACHIEVEMENTS_ITEMS: AchievementItem[] = [
     title: 'HYPER-WARP CRACK',
     description: 'Break 320 KM/H top velocity using nitro boost.',
     rewardCredits: 1000,
+    progress: 0,
+    target: 1,
+    unlocked: false,
+  },
+  {
+    id: 'ach_asteroid_destroyer',
+    title: 'ASTEROID ANNIHILATOR',
+    description: 'Demolish 20 asteroids with your front-mounted destruction beam.',
+    rewardCredits: 1200,
+    progress: 0,
+    target: 20,
+    unlocked: false,
+  },
+  {
+    id: 'ach_combo_supernova',
+    title: 'COMBO SUPERNOVA',
+    description: 'Trigger a 4x or higher Asteroid Shatter combo chain.',
+    rewardCredits: 1500,
     progress: 0,
     target: 1,
     unlocked: false,
@@ -642,6 +661,14 @@ export const progressionStorage = {
         if (!parsed.thrusterColor || parsed.thrusterColor === 'neon_cyan') {
           parsed.thrusterColor = 'solar_gold';
         }
+        parsed.beamCustomization = parsed.beamCustomization || { ...DEFAULT_BEAM_CUSTOMIZATION };
+        parsed.beamUpgrades = parsed.beamUpgrades || { ...DEFAULT_BEAM_UPGRADES };
+        parsed.stats = {
+          ...parsed.stats,
+          asteroidsDestroyed: parsed.stats?.asteroidsDestroyed || 0,
+          beamShotsFired: parsed.stats?.beamShotsFired || 0,
+          maxAsteroidCombo: parsed.stats?.maxAsteroidCombo || 0,
+        };
         return parsed;
       }
     } catch {}
@@ -657,6 +684,8 @@ export const progressionStorage = {
       decal: 'none',
       thrusterColor: 'solar_gold',
       cockpitSkin: 'cyber_stealth',
+      beamCustomization: { ...DEFAULT_BEAM_CUSTOMIZATION },
+      beamUpgrades: { ...DEFAULT_BEAM_UPGRADES },
       upgrades: {
         engine: 0,
         handling: 0,
@@ -673,6 +702,9 @@ export const progressionStorage = {
         topSpeedReached: 0,
         totalDriftSeconds: 0,
         asteroidsAvoided: 0,
+        asteroidsDestroyed: 0,
+        beamShotsFired: 0,
+        maxAsteroidCombo: 0,
       },
     };
   },

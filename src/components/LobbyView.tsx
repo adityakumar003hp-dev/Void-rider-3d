@@ -11,8 +11,13 @@ import {
   Flag,
   RotateCcw,
   Sparkles,
+  Eye,
+  Shield,
+  Zap,
+  Swords,
+  Layers,
 } from 'lucide-react';
-import { PlayerInfo, RoomState, TrackId } from '../types';
+import { PlayerInfo, RoomState, TrackId, CustomRoomSettings } from '../types';
 import { TRACK_CONFIGS } from '../game/trackData';
 import { sound } from '../game/audio';
 
@@ -25,6 +30,9 @@ interface LobbyViewProps {
   onSelectTrack: (trackId: TrackId) => void;
   onLeaveRoom: () => void;
   onOpenGarage: () => void;
+  onToggleTeam?: () => void;
+  onToggleRole?: () => void;
+  onUpdateSettings?: (settings: CustomRoomSettings) => void;
 }
 
 export const LobbyView: React.FC<LobbyViewProps> = ({
@@ -36,13 +44,17 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   onSelectTrack,
   onLeaveRoom,
   onOpenGarage,
+  onToggleTeam,
+  onToggleRole,
+  onUpdateSettings,
 }) => {
   const isHost = room.hostId === playerId;
   const currentPlayer = room.players?.[playerId];
-  const allReady = Object.values(room.players || {}).every((p: PlayerInfo) => p.isReady || p.isBot);
+  const allReady = Object.values(room.players || {}).every((p: PlayerInfo) => p.isReady || p.isBot || p.isSpectator);
   const trackId = room.trackId || 'circuit_alpha';
   const trackConfig = TRACK_CONFIGS[trackId] || TRACK_CONFIGS.circuit_alpha;
   const roomCode = room.id || room.code || 'WARP01';
+  const settings = room.settings;
 
   const copyRoomCode = () => {
     navigator.clipboard.writeText(roomCode);
@@ -50,8 +62,8 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   };
 
   return (
-    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-6 bg-slate-950/85 backdrop-blur-md text-slate-100 select-none">
-      <div className="w-full max-w-4xl bg-slate-950/90 border border-cyan-500/30 rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(0,240,255,0.15)] flex flex-col gap-6 max-h-[92vh] overflow-y-auto">
+    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-4 sm:p-6 bg-slate-950/85 backdrop-blur-md text-slate-100 select-none">
+      <div className="w-full max-w-4xl bg-slate-950/90 border border-cyan-500/30 rounded-3xl p-5 sm:p-8 shadow-[0_0_50px_rgba(0,240,255,0.15)] flex flex-col gap-5 max-h-[92vh] overflow-y-auto">
         {/* Top Room Banner */}
         <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-cyan-500/20">
           <div className="flex items-center gap-4">
@@ -64,8 +76,13 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                   WARP SECTOR LOBBY
                 </span>
                 <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[10px] font-mono text-slate-300">
-                  {Object.keys(room.players).length} / 8 PILOTS
+                  {Object.keys(room.players).length} / {room.maxPlayers} PILOTS
                 </span>
+                {settings?.mode && (
+                  <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-[10px] font-mono font-bold">
+                    {settings.mode === 'DUEL_1V1' ? '1v1 DUEL' : settings.mode}
+                  </span>
+                )}
               </div>
               <h2 className="text-2xl font-ui font-black uppercase text-white tracking-wider">
                 {roomCode}
@@ -95,13 +112,66 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
           </div>
         </div>
 
+        {/* Sector Rules & Telemetry Badges */}
+        <div className="flex flex-wrap items-center gap-2 p-3 rounded-2xl bg-slate-900/60 border border-slate-800 text-xs font-mono">
+          <span className="text-slate-400 uppercase text-[10px] tracking-wider">RULES:</span>
+          <span className="px-2 py-0.5 rounded bg-slate-800 text-cyan-300">
+            {settings?.collisionsEnabled ? 'IMPACT COLLISIONS' : 'GHOST NO-CLIP'}
+          </span>
+          <span className="px-2 py-0.5 rounded bg-slate-800 text-fuchsia-300">
+            {settings?.powerUpsEnabled ? 'TACTICAL POWER-UPS ON' : 'POWER-UPS OFF (PURIST)'}
+          </span>
+          <span className="px-2 py-0.5 rounded bg-slate-800 text-amber-300">
+            {settings?.damageMode === 'SIMULATION' ? 'SIMULATION DAMAGE' : 'ARCADE DAMAGE'}
+          </span>
+          <span className="px-2 py-0.5 rounded bg-slate-800 text-emerald-300">
+            {room.laps} LAPS
+          </span>
+
+          {/* Quick Player Team/Role Toggles */}
+          <div className="ml-auto flex items-center gap-2">
+            {onToggleTeam && (
+              <button
+                onClick={() => {
+                  sound.playMenuClick();
+                  onToggleTeam();
+                }}
+                className={`px-2.5 py-1 rounded-xl text-[11px] font-ui font-black uppercase transition-all ${
+                  currentPlayer?.team === 'ALPHA'
+                    ? 'bg-cyan-500 text-slate-950'
+                    : 'bg-fuchsia-500 text-slate-950'
+                }`}
+              >
+                {currentPlayer?.team === 'ALPHA' ? 'ALPHA FLEET' : 'OMEGA FLEET'}
+              </button>
+            )}
+
+            {onToggleRole && (
+              <button
+                onClick={() => {
+                  sound.playMenuClick();
+                  onToggleRole();
+                }}
+                className={`px-2.5 py-1 rounded-xl text-[11px] font-mono transition-all flex items-center gap-1 ${
+                  currentPlayer?.isSpectator
+                    ? 'bg-cyan-950 border border-cyan-400 text-cyan-300'
+                    : 'bg-slate-800 text-slate-300'
+                }`}
+              >
+                <Eye className="w-3 h-3" />
+                <span>{currentPlayer?.isSpectator ? 'SPECTATOR' : 'RACER'}</span>
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Middle Section: Player List + Track Details */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* Pilots Grid (2 Cols on md) */}
           <div className="md:col-span-2 space-y-3">
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs font-mono uppercase tracking-widest text-cyan-400">
-                ACTIVE ROSTER
+                ACTIVE ROSTER ({Object.keys(room.players).length})
               </span>
               {isHost && (
                 <button
@@ -136,6 +206,8 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                       >
                         {player.isBot ? (
                           <Bot className="w-4 h-4 text-slate-950" />
+                        ) : player.isSpectator ? (
+                          <Eye className="w-4 h-4 text-cyan-300" />
                         ) : (
                           <div className="w-2.5 h-2.5 rounded-full bg-white shadow-sm" />
                         )}
@@ -146,6 +218,22 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                           <span className="font-ui font-black uppercase text-sm text-white">
                             {player.name}
                           </span>
+                          {player.team && (
+                            <span
+                              className={`px-1.5 py-0.2 rounded text-[9px] font-ui font-black uppercase ${
+                                player.team === 'ALPHA'
+                                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                                  : 'bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/40'
+                              }`}
+                            >
+                              {player.team}
+                            </span>
+                          )}
+                          {player.isSpectator && (
+                            <span className="px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[9px] font-mono">
+                              OBSERVER
+                            </span>
+                          )}
                           {id === room.hostId && (
                             <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9px] font-mono">
                               HOST
@@ -158,16 +246,16 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                           )}
                         </div>
                         <span className="text-[11px] font-mono text-slate-400">
-                          {player.shipId ? player.shipId.replace('_', ' ').toUpperCase() : 'INTERCEPTOR'}
+                          {player.isSpectator ? 'TACTICAL OBSERVER' : player.shipId ? player.shipId.replace('_', ' ').toUpperCase() : 'INTERCEPTOR'}
                         </span>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {player.isReady || player.isBot ? (
+                      {player.isReady || player.isBot || player.isSpectator ? (
                         <div className="flex items-center gap-1.5 text-emerald-400 text-xs font-mono">
                           <CheckCircle2 className="w-4 h-4" />
-                          <span>READY</span>
+                          <span>{player.isSpectator ? 'MONITORING' : 'READY'}</span>
                         </div>
                       ) : (
                         <div className="flex items-center gap-1.5 text-slate-400 text-xs font-mono">

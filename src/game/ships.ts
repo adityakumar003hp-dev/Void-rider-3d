@@ -673,5 +673,70 @@ export function createShipMesh(
   shadow.position.y = -0.5;
   shipGroup.add(shadow);
 
+  // Front-Mounted Weapon Emitter System
+  const emitterGroup = new THREE.Group();
+  emitterGroup.name = 'weapon_emitter';
+  
+  // Position emitter at ship prow based on ship geometry
+  let emitterZ = -2.8;
+  let emitterY = 0.05;
+  if (shipId === 'apex_phantom') {
+    emitterZ = -3.2;
+    emitterY = 0.08;
+  } else if (shipId === 'vortex_nemesis') {
+    emitterZ = -2.9;
+    emitterY = 0.05;
+  } else if (shipId === 'solaris_stinger') {
+    emitterZ = -3.4;
+    emitterY = 0.05;
+  } else if (shipId === 'void_valkyrie') {
+    emitterZ = -2.7;
+    emitterY = 0.08;
+  } else if (shipId === 'titan_dreadnought') {
+    emitterZ = -3.1;
+    emitterY = 0.02;
+  }
+  emitterGroup.position.set(0, emitterY, emitterZ);
+
+  // Emitter Housing Barrel
+  const barrelGeo = new THREE.CylinderGeometry(0.14, 0.22, 0.75, 10).rotateX(Math.PI / 2);
+  const barrelMat = new THREE.MeshStandardMaterial({
+    color: 0x182438,
+    metalness: 0.9,
+    roughness: 0.2,
+  });
+  const barrel = new THREE.Mesh(barrelGeo, barrelMat);
+  emitterGroup.add(barrel);
+
+  // Emitter Cowl Fins
+  const cowlGeo = new THREE.BoxGeometry(0.48, 0.08, 0.5);
+  const cowl = new THREE.Mesh(cowlGeo, hullMaterial);
+  cowl.position.set(0, 0, 0.1);
+  emitterGroup.add(cowl);
+
+  // High-Energy Focal Lens / Aperture
+  const apertureGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.08, 12).rotateX(Math.PI / 2);
+  const apertureMat = new THREE.MeshBasicMaterial({
+    color: 0x00f0ff,
+  });
+  const aperture = new THREE.Mesh(apertureGeo, apertureMat);
+  aperture.name = 'emitter_aperture';
+  aperture.position.set(0, 0, -0.4);
+  emitterGroup.add(aperture);
+
+  // Aperture Glow Ring
+  const apertureRingGeo = new THREE.TorusGeometry(0.18, 0.03, 8, 16);
+  const apertureRingMat = new THREE.MeshBasicMaterial({
+    color: 0x00f0ff,
+    transparent: true,
+    opacity: 0.85,
+  });
+  const apertureRing = new THREE.Mesh(apertureRingGeo, apertureRingMat);
+  apertureRing.position.set(0, 0, -0.4);
+  apertureRing.name = 'emitter_glow_ring';
+  emitterGroup.add(apertureRing);
+
+  shipGroup.add(emitterGroup);
+
   return shipGroup;
 }

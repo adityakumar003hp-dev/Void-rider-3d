@@ -35,15 +35,7 @@ export type TrackId =
   | 'cosmic_ring'
   | 'quantum_highway'
   | 'circuit_alpha'
-  | 'nebula_rift'
-  | 'wormhole_express'
-  | 'solar_storm'
-  | 'gravity_free'
-  | 'plasma_storm'
-  | 'skyline_rush'
-  | 'collapsing_track'
-  | 'ring_runner'
-  | 'hyperspace_sprint';
+  | 'nebula_rift';
 
 export type AIDifficulty = 'RECRUIT' | 'STANDARD' | 'VETERAN' | 'ACE' | 'ELITE';
 export type AIPersonality = 'AGGRESSIVE' | 'DEFENSIVE' | 'BALANCED' | 'RISK_TAKER' | 'TECHNICAL';
@@ -112,7 +104,7 @@ export interface ShipDamageZones {
 }
 
 export type DamageZone = 'frontHull' | 'rearEngine' | 'leftWing' | 'rightWing' | 'shieldCore';
-export type DamageMode = 'CASUAL' | 'SIMULATION';
+export type DamageMode = 'CASUAL' | 'SIMULATION' | 'REALISTIC' | 'HARDCORE';
 
 export interface ShipUpgrades {
   engine: number; // 0 to 4 (adds to topSpeed)
@@ -181,6 +173,123 @@ export interface PlayerInput {
   boost: boolean;   // Space
   drift: boolean;   // Shift
   recover: boolean; // R
+  fireBeam?: boolean; // E / Right Mouse Button / Mobile ⚡ button
+}
+
+// Asteroid Destruction Beam System Types
+export type BeamType =
+  | 'STANDARD'
+  | 'PLASMA'
+  | 'LASER'
+  | 'VOID'
+  | 'PULSE'
+  | 'ARC'
+  | 'PHOTON'
+  | 'QUANTUM';
+
+export type BeamCoreShape =
+  | 'THIN'
+  | 'STANDARD'
+  | 'WIDE'
+  | 'DOUBLE'
+  | 'TRIPLE'
+  | 'SPIRAL'
+  | 'SEGMENTED'
+  | 'PULSING';
+
+export type BeamImpactPreset =
+  | 'ENERGY_BURST'
+  | 'PLASMA_EXPLOSION'
+  | 'CRYSTAL_SHATTER'
+  | 'VOID_IMPLOSION'
+  | 'ELECTRIC_BURST'
+  | 'FIREBALL'
+  | 'QUANTUM_FRACTURE'
+  | 'SHOCKWAVE';
+
+export type BeamSoundPreset =
+  | 'HIGH_ENERGY_PULSE'
+  | 'HEAVY_PLASMA'
+  | 'RESONANT_LASER'
+  | 'VOID_SURGE'
+  | 'ARC_DISCHARGE';
+
+export type BeamColorPreset =
+  | 'CYAN'
+  | 'BLUE'
+  | 'VIOLET'
+  | 'MAGENTA'
+  | 'WHITE'
+  | 'RED'
+  | 'GREEN'
+  | 'GOLD'
+  | 'CUSTOM';
+
+export interface BeamCustomization {
+  type: BeamType;
+  coreShape: BeamCoreShape;
+  coreColor: string;
+  outerColor: string;
+  particleColor: string;
+  impactPreset: BeamImpactPreset;
+  soundPreset: BeamSoundPreset;
+  trailLength: number;     // 0.5 to 2.0
+  trailWidth: number;      // 0.5 to 2.0
+  particleDensity: number; // 0.5 to 2.0
+  energyStreaks: boolean;
+  outerGlow: number;       // 0.5 to 2.0
+  coreBrightness: number;  // 0.5 to 2.0
+  pulseSpeed: number;      // 0.5 to 2.0
+  noiseMovement: boolean;
+  shockwaveEnabled: boolean;
+}
+
+export interface BeamUpgrades {
+  power: number;          // 0 to 5 (Damage multiplier)
+  range: number;          // 0 to 5 (Max distance)
+  energyCapacity: number; // 0 to 5 (Energy pool)
+  rechargeRate: number;   // 0 to 5 (Energy recharge speed)
+  fireRate: number;       // 0 to 5 (Damage frequency)
+  cooling: number;        // 0 to 5 (Cooling speed / heat dissipation)
+  impactForce: number;    // 0 to 5 (Debris dispersal force)
+  targeting: number;      // 0 to 5 (Targeting cone & lock angle)
+}
+
+export type BeamStatus =
+  | 'READY'
+  | 'FIRING'
+  | 'LOW_ENERGY'
+  | 'DEPLETED'
+  | 'RECHARGING'
+  | 'OVERHEATED';
+
+export interface TargetLockInfo {
+  hasTarget: boolean;
+  targetId?: number;
+  targetType: 'SMALL' | 'MEDIUM' | 'LARGE' | 'ARMORED' | 'ENERGY' | 'BARRIER';
+  health: number;
+  maxHealth: number;
+  distance: number;
+}
+
+export interface BeamTelemetry {
+  energy: number;
+  maxEnergy: number;
+  heat: number;
+  isOverheated: boolean;
+  status: BeamStatus;
+  targetLock: TargetLockInfo | null;
+  activeBeam: boolean;
+}
+
+export type AsteroidSizeCategory = 'SMALL' | 'MEDIUM' | 'LARGE' | 'ARMORED' | 'ENERGY';
+
+export interface ModeBeamConfig {
+  beamEnabled: boolean;
+  beamDamageMultiplier: number;
+  beamEnergyMultiplier: number;
+  beamCooldown: number;
+  allowedTargets: ('ASTEROID' | 'DEBRIS' | 'BARRIER')[];
 }
 
 export interface PlayerRaceState {
@@ -215,6 +324,8 @@ export interface PlayerInfo {
   isHost: boolean;
   isReady: boolean;
   isBot?: boolean;
+  isSpectator?: boolean;
+  team?: 'ALPHA' | 'OMEGA';
   ping: number;
   raceState?: PlayerRaceState;
 }
@@ -232,6 +343,7 @@ export interface RoomState {
   raceStartTime: number;
   players: Record<string, PlayerInfo>;
   results: RaceResult[];
+  settings?: CustomRoomSettings;
 }
 
 export interface RaceResult {
@@ -261,6 +373,9 @@ export type ClientMessageType =
   | 'LEAVE_ROOM'
   | 'USE_POWERUP'
   | 'DAMAGE_EVENT'
+  | 'UPDATE_SETTINGS'
+  | 'SET_TEAM'
+  | 'SET_ROLE'
   | 'PING';
 
 export interface ClientMessage {
@@ -275,6 +390,10 @@ export interface ClientMessage {
   trackId?: TrackId;
   laps?: number;
   isReady?: boolean;
+  isSpectator?: boolean;
+  team?: 'ALPHA' | 'OMEGA';
+  mode?: MultiplayerMode;
+  settings?: CustomRoomSettings;
   raceState?: PlayerRaceState;
   powerUpType?: PowerUpType;
   damageZone?: DamageZone;
@@ -412,6 +531,8 @@ export interface PlayerProgression {
   thrusterColor: ThrusterFlameColor;
   cockpitSkin: CockpitSkin;
   upgrades: ShipUpgrades;
+  beamCustomization?: BeamCustomization;
+  beamUpgrades?: BeamUpgrades;
   unlockedShipIds: string[];
   dailyMissions: MissionItem[];
   achievements: AchievementItem[];
@@ -422,6 +543,7 @@ export interface PlayerProgression {
     topSpeedReached: number;
     totalDriftSeconds: number;
     asteroidsAvoided: number;
+    asteroidsDestroyed?: number;
   };
 }
 

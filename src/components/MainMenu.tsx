@@ -27,6 +27,7 @@ interface MainMenuProps {
   onQuickMatch: () => void;
   onOpenCreateRoom: () => void;
   onOpenJoinRoom: () => void;
+  onOpenMultiplayer?: () => void;
   onOpenAIRace: () => void;
   onOpenGameModes: () => void;
   onOpenGarage: () => void;
@@ -50,6 +51,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onQuickMatch,
   onOpenCreateRoom,
   onOpenJoinRoom,
+  onOpenMultiplayer,
   onOpenAIRace,
   onOpenGameModes,
   onOpenGarage,
@@ -161,7 +163,11 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           <button
             onClick={() => {
               sound.playMenuClick();
-              setShowMultiplayerModal(true);
+              if (onOpenMultiplayer) {
+                onOpenMultiplayer();
+              } else {
+                setShowMultiplayerModal(true);
+              }
             }}
             className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-[#091222]/90 border border-cyan-500/40 hover:border-cyan-400 text-cyan-300 hover:text-white font-ui font-black text-xs uppercase tracking-wider transition-all hover:shadow-[0_0_15px_rgba(0,240,255,0.3)] active:scale-[0.98] backdrop-blur-md"
           >

@@ -29,7 +29,12 @@ import {
   AIRaceConfig,
   ShipDamageZones,
   DamageMode,
+  BeamCustomization,
+  BeamUpgrades,
+  BeamTelemetry,
 } from '../types';
+import { BeamSystem, DEFAULT_BEAM_CUSTOMIZATION, DEFAULT_BEAM_UPGRADES } from './beamSystem';
+import { Obstacle } from './trackData';
 
 export interface LocalAIRacer {
   id: string;
@@ -81,6 +86,9 @@ export interface GameEngineCallbacks {
   onLapTimesUpdate?: (currentLapMs: number, bestLapMs: number) => void;
   onCameraModeChange?: (mode: CameraMode) => void;
   onDamageZonesUpdate?: (zones: ShipDamageZones) => void;
+  onSpectatorTargetChange?: (pilotName: string) => void;
+  onBeamTelemetry?: (telemetry: BeamTelemetry) => void;
+  onAsteroidDestroyed?: (obstacle: Obstacle, points: number, credits: number) => void;
 }
 
 export class GameEngine {
@@ -89,6 +97,11 @@ export class GameEngine {
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   private animFrameId: number = 0;
+
+  // Asteroid Destruction Beam System
+  public beamSystem: BeamSystem;
+  public localBeamCustomization: BeamCustomization = { ...DEFAULT_BEAM_CUSTOMIZATION };
+  public localBeamUpgrades: BeamUpgrades = { ...DEFAULT_BEAM_UPGRADES };
 
   public trackId: TrackId = 'circuit_alpha';
   public track: CosmicTrack = defaultTrack;
@@ -232,6 +245,11 @@ export class GameEngine {
     shieldCore: 100,
   };
   public damageMode: DamageMode = 'CASUAL';
+  public collisionsEnabled: boolean = true;
+  public powerUpsEnabled: boolean = true;
+  public isSpectator: boolean = false;
+  public spectatorTargetIndex: number = 0;
+  public spectatorTargetName: string = '';
 
   // Decoy & EMP Visual Objects
   private decoyGroup: THREE.Group | null = null;
@@ -296,6 +314,14 @@ export class GameEngine {
     this.buildShortcutPortal();
     this.buildCreditsField();
     this.buildPowerUpPods();
+
+    // Initialize Asteroid Destruction Beam System
+    this.beamSystem = new BeamSystem(
+      this.localBeamCustomization,
+      this.localBeamUpgrades,
+      'STANDARD'
+    );
+    this.scene.add(this.beamSystem.containerGroup);
 
     // Resize Handler
     window.addEventListener('resize', this.onResize);
@@ -1541,6 +1567,7 @@ export class GameEngine {
     if (this.collisionCooldown <= 0 && this.isRacing) {
       const shipPos = this.playerShipGroup.position;
       for (const obs of this.track.obstacles) {
+        if (obs.isDestroyed || obs.health <= 0) continue;
         if (shipPos.distanceTo(obs.position) < obs.radius + 1.8) {
           if (this.phaseShieldTimer > 0) {
             sound.playShieldDeflect();
@@ -1604,10 +1631,12 @@ export class GameEngine {
       }
     }
 
-    if (!this.isDestroyed && this.invulnerableTimer <= 0) {
+    if (this.collisionsEnabled && !this.isDestroyed && this.invulnerableTimer <= 0 && this.playerShipGroup && !this.isSpectator) {
       const myPos = this.playerShipGroup.position;
+
+      // Collide with AI Racers
       for (const ai of this.localAIRacers) {
-        if (ai.isDestroyed) continue;
+        if (ai.isDestroyed || !ai.group) continue;
         const dist = myPos.distanceTo(ai.group.position);
         if (dist < 3.2) {
           const diff = this.lateralOffset - ai.currentLateral;
@@ -1621,6 +1650,34 @@ export class GameEngine {
             this.triggerCollisionBurst(midPoint, 0x00f0ff, 20);
             this.currentSpeed = Math.max(10, this.currentSpeed * 0.92);
             this.collisionCooldown = 0.35;
+
+            if (this.damageMode !== 'CASUAL') {
+              const zone = diff > 0 ? 'leftWing' : 'rightWing';
+              this.applyZoneDamage(zone, this.damageMode === 'HARDCORE' ? 14 : 7);
+            }
+          }
+        }
+      }
+
+      // Collide with Remote Multiplayer Ships
+      for (const [, remote] of this.remoteShips.entries()) {
+        if (!remote.group) continue;
+        const dist = myPos.distanceTo(remote.group.position);
+        if (dist < 3.2) {
+          const deltaX = myPos.x - remote.group.position.x;
+          const pushDir = Math.sign(deltaX) || (Math.random() > 0.5 ? 1 : -1);
+          this.lateralOffset += pushDir * 3.5 * dt * 8;
+          if (this.collisionCooldown <= 0) {
+            sound.playCollision();
+            if (this.cameraShakeEnabled) this.cameraShake = 0.4;
+            const midPoint = myPos.clone().add(remote.group.position).multiplyScalar(0.5);
+            this.triggerCollisionBurst(midPoint, 0xff00aa, 22);
+            this.currentSpeed = Math.max(10, this.currentSpeed * 0.90);
+            this.collisionCooldown = 0.35;
+
+            if (this.damageMode !== 'CASUAL') {
+              this.applyZoneDamage('frontHull', this.damageMode === 'HARDCORE' ? 15 : 8);
+            }
           }
         }
       }
@@ -1904,6 +1961,57 @@ export class GameEngine {
   }
 
   private updateCamera(dt: number) {
+    if (this.isSpectator) {
+      if (this.playerShipGroup) {
+        this.playerShipGroup.visible = false;
+      }
+
+      // Collect all active observed racers (remote ships + AI bots)
+      const targets: { name: string; position: THREE.Vector3; quaternion: THREE.Quaternion }[] = [];
+      for (const [rId, remote] of this.remoteShips.entries()) {
+        if (remote.group) {
+          targets.push({
+            name: `PILOT ${rId.substring(0, 4).toUpperCase()}`,
+            position: remote.group.position,
+            quaternion: remote.group.quaternion,
+          });
+        }
+      }
+      for (const ai of this.localAIRacers) {
+        if (ai.group && !ai.isDestroyed) {
+          targets.push({
+            name: ai.name,
+            position: ai.group.position,
+            quaternion: ai.group.quaternion,
+          });
+        }
+      }
+
+      if (targets.length > 0) {
+        const target = targets[this.spectatorTargetIndex % targets.length];
+        if (this.spectatorTargetName !== target.name) {
+          this.spectatorTargetName = target.name;
+          this.callbacks.onSpectatorTargetChange?.(target.name);
+        }
+
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(target.quaternion);
+        const up = new THREE.Vector3(0, 1, 0).applyQuaternion(target.quaternion);
+        const targetCamPos = target.position
+          .clone()
+          .add(forward.clone().multiplyScalar(-18))
+          .add(up.clone().multiplyScalar(6.5));
+        const lookTarget = target.position.clone().add(forward.clone().multiplyScalar(20));
+
+        this.camera.position.lerp(targetCamPos, 0.2);
+        this.camera.lookAt(lookTarget);
+      } else {
+        const sample = this.track.getSampleAt((Date.now() * 0.00005) % 1.0);
+        this.camera.position.lerp(sample.point.clone().add(new THREE.Vector3(0, 30, 40)), 0.05);
+        this.camera.lookAt(sample.point);
+      }
+      return;
+    }
+
     if (!this.playerShipGroup) return;
 
     const sample = this.track.getSampleAt(this.splineT);
@@ -1972,9 +2080,27 @@ export class GameEngine {
     if (this.asteroidInstancedMesh) {
       const obstacles = this.track.obstacles;
       const count = Math.min(obstacles.length, this.asteroidPoolSize);
+      const shipPos = this.playerShipGroup ? this.playerShipGroup.position : null;
+
       for (let i = 0; i < count; i++) {
         const ast = obstacles[i];
         if (!ast) continue;
+
+        // Destroyed Asteroids: hidden from rendering & collisions
+        if (ast.isDestroyed || ast.health <= 0) {
+          if (ast.respawnTimer !== undefined && ast.respawnTimer > 0) {
+            ast.respawnTimer -= dt;
+            if (ast.respawnTimer <= 0 && (!shipPos || shipPos.distanceTo(ast.position) > 40)) {
+              ast.isDestroyed = false;
+              ast.health = ast.maxHealth;
+            }
+          }
+          this.dummyObj.position.set(0, -9999, 0);
+          this.dummyObj.scale.set(0, 0, 0);
+          this.dummyObj.updateMatrix();
+          this.asteroidInstancedMesh.setMatrixAt(i, this.dummyObj.matrix);
+          continue;
+        }
 
         if (!ast.currentRotation) ast.currentRotation = new THREE.Vector3();
         ast.currentRotation.x += ast.rotationSpeed.x;
@@ -1988,13 +2114,20 @@ export class GameEngine {
           ast.position.z = ast.basePosition.z + Math.sin(time * 1.1) * ast.driftVelocity.z;
         }
 
+        // Damage crack or flash feedback
+        let displayRadius = ast.radius;
+        if (ast.hitFlashTimer && ast.hitFlashTimer > 0) {
+          ast.hitFlashTimer = Math.max(0, ast.hitFlashTimer - dt);
+          displayRadius *= 1.08 + Math.sin(this.totalTimeElapsed * 40) * 0.05;
+        }
+
         this.dummyObj.position.copy(ast.position);
         this.dummyObj.rotation.set(
           ast.currentRotation.x,
           ast.currentRotation.y,
           ast.currentRotation.z
         );
-        this.dummyObj.scale.setScalar(ast.radius);
+        this.dummyObj.scale.setScalar(displayRadius);
         this.dummyObj.updateMatrix();
         this.asteroidInstancedMesh.setMatrixAt(i, this.dummyObj.matrix);
       }
@@ -2195,6 +2328,12 @@ export class GameEngine {
 
   private updatePowerUpPods(dt: number) {
     if (!this.playerShipGroup || this.powerUpPodGroups.length === 0) return;
+    if (!this.powerUpsEnabled) {
+      this.powerUpPodGroups.forEach(g => {
+        if (g) g.visible = false;
+      });
+      return;
+    }
     const pods = this.track.powerUpPods;
     const shipPos = this.playerShipGroup.position;
 
@@ -2330,6 +2469,51 @@ export class GameEngine {
         this.triggerCollisionBurst(this.playerShipGroup.position, 0xff0055, 36);
       }
     }
+  }
+
+  public applyZoneDamage(zone: keyof ShipDamageZones, amount: number) {
+    if (this.invulnerableTimer > 0 || this.isDestroyed || this.isSpectator) return;
+
+    if (this.phaseShieldTimer > 0) {
+      sound.playShieldDeflect();
+      return;
+    }
+
+    let remaining = amount;
+    if (this.damageZones.shieldCore > 0) {
+      const absorbed = Math.min(this.damageZones.shieldCore, remaining);
+      this.damageZones.shieldCore = Math.max(0, this.damageZones.shieldCore - absorbed);
+      remaining -= absorbed;
+      sound.playShieldHit();
+    }
+
+    if (remaining > 0) {
+      if (zone === 'shieldCore') {
+        this.damageZones.shieldCore = Math.max(0, this.damageZones.shieldCore - remaining);
+      } else {
+        this.damageZones[zone] = Math.min(100, this.damageZones[zone] + remaining);
+      }
+
+      const avgDamage = (
+        this.damageZones.frontHull * 0.35 +
+        this.damageZones.rearEngine * 0.25 +
+        this.damageZones.leftWing * 0.20 +
+        this.damageZones.rightWing * 0.20
+      );
+      this.hullHealth = Math.max(0, Math.round(100 - avgDamage));
+      this.callbacks.onHullUpdate?.(this.hullHealth);
+
+      if (this.damageZones.frontHull >= 100 || this.hullHealth <= 0) {
+        this.destroyPlayerShip('CRITICAL COMPONENT DAMAGE BREACH');
+        return;
+      }
+    }
+
+    this.callbacks.onDamageZonesUpdate?.({ ...this.damageZones });
+  }
+
+  public cycleSpectatorTarget() {
+    this.spectatorTargetIndex++;
   }
 
   private updateThrusterParticles(dt: number) {
@@ -2951,10 +3135,74 @@ export class GameEngine {
       this.updateCamera(dt);
       this.updateSpeedParticles();
       this.updateAsteroids(dt);
+      this.updateBeamSystem(dt);
     }
 
     this.renderer.render(this.scene, this.camera);
   };
+
+  private updateBeamSystem(dt: number) {
+    if (!this.beamSystem || !this.playerShipGroup) return;
+
+    // Weapon emitter world position
+    const emitter = this.playerShipGroup.getObjectByName('weapon_emitter');
+    const emitterPos = new THREE.Vector3();
+    if (emitter) {
+      emitter.getWorldPosition(emitterPos);
+    } else {
+      emitterPos.copy(this.playerShipGroup.position);
+    }
+
+    // Ship forward vector (pointing along -Z in ship local space)
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.playerShipGroup.quaternion);
+
+    // Update target locking cone detection
+    this.beamSystem.updateTargeting(emitterPos, forward, this.track.obstacles);
+
+    // Check if beam is firing (Desktop E / RMB or Mobile ⚡ button)
+    if (this.input.fireBeam && this.isRacing && !this.isDestroyed) {
+      this.beamSystem.fireBeam(
+        emitterPos,
+        forward,
+        dt,
+        (obstacle, points, credits) => {
+          this.sessionCredits += credits;
+          this.callbacks.onCreditCollected?.(this.sessionCredits, credits);
+          this.callbacks.onHazardHit?.(
+            `ASTEROID DESTROYED +${credits} VC // +${points} PTS`
+          );
+          this.callbacks.onAsteroidDestroyed?.(obstacle, points, credits);
+        }
+      );
+    } else {
+      this.beamSystem.ceaseFire();
+    }
+
+    // Update beam internal physics, cooling, fragments, shockwaves
+    this.beamSystem.update(dt);
+
+    // Dynamic recoil impulse and screen shake
+    if (this.beamSystem.screenShakeIntensity > 0 && this.cameraShakeEnabled) {
+      this.cameraShake = Math.max(this.cameraShake, this.beamSystem.screenShakeIntensity);
+    }
+
+    // Push beam telemetry to HUD
+    this.callbacks.onBeamTelemetry?.(this.beamSystem.getTelemetry());
+  }
+
+  public setBeamCustomization(customization: BeamCustomization) {
+    this.localBeamCustomization = { ...customization };
+    this.beamSystem?.updateCustomization(customization);
+  }
+
+  public setBeamUpgrades(upgrades: BeamUpgrades) {
+    this.localBeamUpgrades = { ...upgrades };
+    this.beamSystem?.updateUpgrades(upgrades);
+  }
+
+  public setBeamInput(firing: boolean) {
+    this.input.fireBeam = firing;
+  }
 
   private onResize = () => {
     if (!this.container) return;
@@ -2969,6 +3217,10 @@ export class GameEngine {
     cancelAnimationFrame(this.animFrameId);
     window.removeEventListener('resize', this.onResize);
     this.stopRace();
+    if (this.beamSystem) {
+      this.beamSystem.dispose();
+      this.scene.remove(this.beamSystem.containerGroup);
+    }
     if (this.asteroidInstancedMesh) {
       this.scene.remove(this.asteroidInstancedMesh);
       this.asteroidInstancedMesh.geometry.dispose();

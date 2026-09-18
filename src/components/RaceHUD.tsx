@@ -17,8 +17,11 @@ import {
   Anchor,
   Copy,
   Flame,
+  Eye,
+  Target,
+  Crosshair,
 } from 'lucide-react';
-import { ActivePowerUp, CameraMode, DynamicTrackEvent, PlayerInput, ShipDamageZones } from '../types';
+import { ActivePowerUp, BeamTelemetry, CameraMode, DynamicTrackEvent, PlayerInput, ShipDamageZones } from '../types';
 
 interface RaceHUDProps {
   speed: number;
@@ -46,10 +49,14 @@ interface RaceHUDProps {
   cameraMode: CameraMode;
   trackId?: string;
   damageZones?: ShipDamageZones;
+  isSpectator?: boolean;
+  spectatorTargetName?: string;
+  onNextSpectatorTarget?: () => void;
   onTogglePause: () => void;
   onToggleCamera: () => void;
   onInputChange?: (input: Partial<PlayerInput>) => void;
   onRecover?: () => void;
+  beamTelemetry?: BeamTelemetry | null;
 }
 
 const SECTOR_NAMES: Record<string, string> = {
@@ -88,10 +95,14 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
   cameraMode,
   trackId = 'circuit_alpha',
   damageZones,
+  isSpectator = false,
+  spectatorTargetName,
+  onNextSpectatorTarget,
   onTogglePause,
   onToggleCamera,
   onInputChange,
   onRecover,
+  beamTelemetry,
 }) => {
   // Joystick State
   const [stickPos, setStickPos] = useState({ x: 0, y: 0 });
@@ -276,6 +287,27 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           </div>
         </div>
 
+        {/* Top Center: Spectator Broadcast Banner */}
+        {isSpectator && (
+          <div className="flex flex-col items-center pointer-events-auto bg-[#050b14]/90 border border-purple-500/60 rounded-2xl px-4 py-2 backdrop-blur-md shadow-[0_0_20px_rgba(168,85,247,0.3)] animate-pulse">
+            <div className="flex items-center gap-2 text-xs font-mono font-bold text-purple-400 tracking-widest">
+              <Eye className="w-4 h-4 text-purple-400" />
+              <span>SPECTATOR BROADCAST</span>
+            </div>
+            <div className="text-white font-ui font-black text-sm tracking-wider mt-0.5">
+              OBSERVING: <span className="text-cyan-400">{spectatorTargetName || 'LEAD PILOT'}</span>
+            </div>
+            {onNextSpectatorTarget && (
+              <button
+                onClick={onNextSpectatorTarget}
+                className="mt-1.5 px-3 py-1 bg-purple-900/60 hover:bg-purple-850 border border-purple-400/50 rounded-lg text-[10px] font-mono font-bold text-white uppercase tracking-wider transition-all active:scale-95 cursor-pointer"
+              >
+                SWITCH PILOT (SPACE)
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Top Right: Camera, Pause, Race Timer & Minimap Radar */}
         <div className="flex flex-col items-end gap-2 sm:gap-2.5 select-none">
           {/* Camera & Pause Buttons */}
@@ -427,6 +459,94 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
         {shortcutMessage && (
           <div className="px-5 py-2 rounded-2xl bg-fuchsia-500/20 border border-fuchsia-400 text-fuchsia-300 text-xs font-ui font-black uppercase tracking-wider shadow-[0_0_20px_#ff00e5] animate-bounce">
             WARP PASSAGE: {shortcutMessage}
+          </div>
+        )}
+
+        {/* Asteroid Destruction Beam Target Reticle & HUD Lock */}
+        {beamTelemetry?.hasTargetLock && (
+          <div className="flex flex-col items-center animate-fadeIn pointer-events-none select-none">
+            <div className="relative flex items-center justify-center">
+              {/* Animated Locking Brackets */}
+              <div
+                className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full border-2 transition-all duration-100 flex items-center justify-center ${
+                  beamTelemetry.isFiring
+                    ? 'border-rose-500 scale-90 shadow-[0_0_25px_#ff0055]'
+                    : 'border-cyan-400/80 scale-100 shadow-[0_0_15px_#00f0ff]'
+                }`}
+              >
+                {/* Crosshair ticks */}
+                <div className="absolute -top-1 w-0.5 h-3 bg-cyan-300" />
+                <div className="absolute -bottom-1 w-0.5 h-3 bg-cyan-300" />
+                <div className="absolute -left-1 w-3 h-0.5 bg-cyan-300" />
+                <div className="absolute -right-1 w-3 h-0.5 bg-cyan-300" />
+                <div
+                  className={`w-4 h-4 rounded-full border border-dashed transition-all ${
+                    beamTelemetry.isFiring ? 'border-rose-300 animate-spin' : 'border-cyan-200'
+                  }`}
+                />
+              </div>
+            </div>
+
+            {/* Target telemetry badge */}
+            <div className="mt-1.5 px-3 py-1 rounded-xl bg-slate-950/90 border border-cyan-400/70 text-cyan-300 text-[10px] font-mono font-bold tracking-wider flex items-center gap-2 shadow-[0_0_12px_rgba(0,240,255,0.3)]">
+              <Crosshair
+                className={`w-3.5 h-3.5 ${
+                  beamTelemetry.isFiring
+                    ? 'text-rose-400 animate-spin'
+                    : 'text-cyan-400 animate-pulse'
+                }`}
+              />
+              <span>ASTEROID LOCK</span>
+              <span className="text-white">{Math.round(beamTelemetry.targetDistance)}M</span>
+              {beamTelemetry.targetMaxHealth > 0 && (
+                <div className="flex items-center gap-1">
+                  <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                    <div
+                      className={`h-full transition-all duration-75 ${
+                        beamTelemetry.targetHealth < 35 ? 'bg-rose-500' : 'bg-emerald-400'
+                      }`}
+                      style={{
+                        width: `${Math.max(
+                          0,
+                          Math.min(
+                            100,
+                            (beamTelemetry.targetHealth / beamTelemetry.targetMaxHealth) * 100
+                          )
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="text-[9px] text-slate-300">
+                    {Math.round(beamTelemetry.targetHealth)}/{beamTelemetry.targetMaxHealth}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Asteroid Shatter Combo Banner */}
+        {beamTelemetry && beamTelemetry.comboCount > 1 && (
+          <div className="flex flex-col items-center animate-bounce pointer-events-none select-none">
+            <div className="px-4 py-1.5 rounded-2xl bg-gradient-to-r from-amber-500/90 via-rose-500/90 to-amber-500/90 border-2 border-amber-300 text-slate-950 font-ui font-black text-sm uppercase tracking-wider shadow-[0_0_25px_#ffaa00] flex items-center gap-2">
+              <Flame className="w-4 h-4 text-amber-950 fill-amber-300" />
+              <span>SHATTER COMBO x{beamTelemetry.comboCount}</span>
+              <span className="px-1.5 py-0.5 rounded-md bg-slate-950 text-amber-300 text-[10px] font-mono">
+                +{beamTelemetry.comboMultiplier.toFixed(1)}x VC
+              </span>
+            </div>
+            {/* Combo Timer Bar */}
+            <div className="w-32 h-1 bg-slate-900/90 rounded-full mt-1 overflow-hidden border border-amber-500/50">
+              <div
+                className="h-full bg-amber-400 transition-all duration-75"
+                style={{
+                  width: `${Math.max(
+                    0,
+                    Math.min(100, (beamTelemetry.comboTimeRemaining / 3.0) * 100)
+                  )}%`,
+                }}
+              />
+            </div>
           </div>
         )}
 

@@ -10,6 +10,7 @@ import {
   ClientMessage,
   ServerMessage,
   RaceResult,
+  CustomRoomSettings,
 } from './src/types';
 
 const PORT = 3000;
@@ -56,6 +57,9 @@ app.get('/api/rooms', (req, res) => {
     status: r.status,
     playerCount: Object.keys(r.players).length,
     maxPlayers: r.maxPlayers,
+    trackId: r.trackId || 'neon_orbit',
+    laps: r.laps || 2,
+    settings: r.settings,
   }));
   res.json({ rooms: publicRooms });
 });
@@ -150,6 +154,11 @@ function addBotToRoom(room: RoomState): boolean {
   const shipId = botShips[Math.floor(Math.random() * botShips.length)];
   const color = botColors[Math.floor(Math.random() * botColors.length)];
 
+  // Balance team assignments for bots in team modes
+  const alphaCount = Object.values(room.players).filter(p => p.team === 'ALPHA').length;
+  const omegaCount = Object.values(room.players).filter(p => p.team === 'OMEGA').length;
+  const team = alphaCount <= omegaCount ? 'ALPHA' : 'OMEGA';
+
   room.players[botId] = {
     id: botId,
     name: `[AI] ${name}`,
@@ -158,6 +167,7 @@ function addBotToRoom(room: RoomState): boolean {
     isHost: false,
     isReady: true,
     isBot: true,
+    team,
     ping: 0,
   };
   return true;
@@ -183,18 +193,32 @@ function handleClientMessage(playerId: string, ws: WebSocket, msg: ClientMessage
       const playerSecondaryColor = msg.secondaryColor || '#ff00e5';
       const playerDecal = msg.decal || 'none';
       const playerUpgrades = msg.upgrades || { engine: 0, handling: 0, boost: 0, chassis: 0 };
-      const trackId = msg.trackId || 'neon_orbit';
+      const trackId = msg.trackId || msg.settings?.trackId || 'neon_orbit';
+      const laps = msg.laps || msg.settings?.laps || 2;
+      const isDuel = msg.settings?.mode === 'DUEL_1V1';
+      const maxPlayers = isDuel ? 2 : 8;
+
+      const settings = msg.settings || {
+        mode: isDuel ? 'DUEL_1V1' : 'CASUAL',
+        trackId,
+        laps,
+        aiBots: true,
+        collisionsEnabled: true,
+        powerUpsEnabled: true,
+        damageMode: 'CASUAL',
+      };
 
       const newRoom: RoomState = {
         code,
         name: `${playerName}'s Circuit`,
         hostId: playerId,
         status: 'LOBBY',
-        maxPlayers: 8,
-        laps: msg.laps || 2,
+        maxPlayers,
+        laps,
         countdown: 3,
         raceStartTime: 0,
         trackId,
+        settings,
         players: {
           [playerId]: {
             id: playerId,
@@ -206,6 +230,8 @@ function handleClientMessage(playerId: string, ws: WebSocket, msg: ClientMessage
             upgrades: playerUpgrades,
             isHost: true,
             isReady: true,
+            isSpectator: !!msg.isSpectator,
+            team: msg.team || 'ALPHA',
             ping: 20,
           },
         },
@@ -223,11 +249,12 @@ function handleClientMessage(playerId: string, ws: WebSocket, msg: ClientMessage
       break;
     }
     case 'QUICK_MATCH': {
-      // Find open lobby with space
+      // Find open lobby with space (and matching mode if requested)
       let foundRoom: RoomState | null = null;
       for (const room of rooms.values()) {
         const pCount = Object.keys(room.players).length;
-        if (room.status === 'LOBBY' && pCount < room.maxPlayers) {
+        const matchesMode = !msg.mode || room.settings?.mode === msg.mode;
+        if (room.status === 'LOBBY' && pCount < room.maxPlayers && matchesMode) {
           foundRoom = room;
           break;
         }
@@ -238,12 +265,22 @@ function handleClientMessage(playerId: string, ws: WebSocket, msg: ClientMessage
         joinExistingRoom(playerId, ws, foundRoom.code, msg);
       } else {
         // Create new public room
-        handleClientMessage(playerId, ws, { ...msg, type: 'CREATE_ROOM' });
+        const defaultMode = msg.mode || 'CASUAL';
+        const isDuel = defaultMode === 'DUEL_1V1';
+        const createSettings: CustomRoomSettings = {
+          mode: defaultMode,
+          trackId: msg.trackId || 'neon_orbit',
+          laps: 2,
+          aiBots: !isDuel,
+          collisionsEnabled: true,
+          powerUpsEnabled: true,
+          damageMode: defaultMode === 'COMPETITIVE' ? 'REALISTIC' : 'CASUAL',
+        };
+        handleClientMessage(playerId, ws, { ...msg, type: 'CREATE_ROOM', settings: createSettings });
         const currentEntry = playerSockets.get(playerId);
         if (currentEntry?.roomId) {
           const createdRoom = rooms.get(currentEntry.roomId);
-          if (createdRoom) {
-            addBotToRoom(createdRoom);
+          if (createdRoom && !isDuel) {
             addBotToRoom(createdRoom);
             addBotToRoom(createdRoom);
             broadcastToRoom(createdRoom.code, {
@@ -396,8 +433,26 @@ function handleClientMessage(playerId: string, ws: WebSocket, msg: ClientMessage
       const p = room.players[playerId];
       if (!p) return;
 
-      // Validate & update server state
+      // Anti-Cheat: Validate and clamp speed (max realistic speed with all upgrades + full boost is 480 km/h)
       const incoming = msg.raceState;
+      const validatedSpeed = Math.min(Math.max(incoming.speed || 0, 0), 480);
+      incoming.speed = validatedSpeed;
+
+      // Anti-Cheat: Prevent checkpoint teleportation / backwards skipping
+      const prevCheckpoint = p.raceState?.currentCheckpoint ?? 0;
+      const prevLap = p.raceState?.lap ?? 1;
+      const cpDelta = (incoming.currentCheckpoint - prevCheckpoint + 12) % 12;
+      if (cpDelta > 4 && cpDelta < 9) {
+        // Reject suspicious checkpoint jumps across the track
+        incoming.currentCheckpoint = prevCheckpoint;
+      }
+
+      // Anti-Cheat: Validate lap completion elapsed time (minimum 12s per full cosmic lap)
+      const elapsedSec = (Date.now() - room.raceStartTime) / 1000;
+      if (incoming.lap > prevLap && elapsedSec < (incoming.lap - 1) * 12) {
+        incoming.lap = prevLap;
+      }
+
       p.raceState = {
         ...p.raceState,
         ...incoming,
@@ -426,8 +481,8 @@ function handleClientMessage(playerId: string, ws: WebSocket, msg: ClientMessage
         });
 
         // Check if all players (or sufficient players) have completed
-        const totalNonBots = Object.values(room.players).filter(pl => !pl.isBot).length;
-        const finishedNonBots = room.results.filter(r => !r.name.startsWith('[AI]')).length;
+        const totalNonBots = Object.values(room.players).filter(pl => !pl.isBot && !pl.isSpectator).length;
+        const finishedNonBots = room.results.filter(r => !r.name?.startsWith('[AI]')).length;
 
         if (finishedNonBots >= totalNonBots || room.results.length >= Object.keys(room.players).length) {
           room.status = 'FINISHED';
@@ -438,6 +493,45 @@ function handleClientMessage(playerId: string, ws: WebSocket, msg: ClientMessage
           });
         }
       }
+      break;
+    }
+    case 'UPDATE_SETTINGS': {
+      if (!playerEntry.roomId) return;
+      const room = rooms.get(playerEntry.roomId);
+      if (!room || room.hostId !== playerId) return;
+      if (msg.settings) {
+        room.settings = { ...room.settings, ...msg.settings };
+        if (msg.settings.laps) room.laps = msg.settings.laps;
+        if (msg.settings.trackId) room.trackId = msg.settings.trackId;
+        broadcastToRoom(room.code, {
+          type: 'ROOM_UPDATED',
+          room,
+        });
+      }
+      break;
+    }
+    case 'SET_TEAM': {
+      if (!playerEntry.roomId) return;
+      const room = rooms.get(playerEntry.roomId);
+      if (!room || !room.players[playerId]) return;
+      if (msg.team === 'ALPHA' || msg.team === 'OMEGA') {
+        room.players[playerId].team = msg.team;
+        broadcastToRoom(room.code, {
+          type: 'ROOM_UPDATED',
+          room,
+        });
+      }
+      break;
+    }
+    case 'SET_ROLE': {
+      if (!playerEntry.roomId) return;
+      const room = rooms.get(playerEntry.roomId);
+      if (!room || !room.players[playerId]) return;
+      room.players[playerId].isSpectator = !!msg.isSpectator;
+      broadcastToRoom(room.code, {
+        type: 'ROOM_UPDATED',
+        room,
+      });
       break;
     }
     case 'RESTART_RACE': {
@@ -510,6 +604,11 @@ function joinExistingRoom(playerId: string, ws: WebSocket, code: string, msg: Cl
   const playerDecal = msg.decal || 'none';
   const playerUpgrades = msg.upgrades || { engine: 0, handling: 0, boost: 0, chassis: 0 };
 
+  // Determine team balance
+  const alphaCount = Object.values(room.players).filter(p => p.team === 'ALPHA').length;
+  const omegaCount = Object.values(room.players).filter(p => p.team === 'OMEGA').length;
+  const assignedTeam = msg.team || (alphaCount <= omegaCount ? 'ALPHA' : 'OMEGA');
+
   room.players[playerId] = {
     id: playerId,
     name: playerName,
@@ -520,6 +619,8 @@ function joinExistingRoom(playerId: string, ws: WebSocket, code: string, msg: Cl
     upgrades: playerUpgrades,
     isHost: false,
     isReady: false,
+    isSpectator: !!msg.isSpectator,
+    team: assignedTeam,
     ping: 25,
   };
 
