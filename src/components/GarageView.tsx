@@ -14,7 +14,11 @@ import {
   ThrusterFlameColor,
   CockpitSkin,
   UpgradeType,
+  BeamCustomization,
+  BeamUpgrades,
+  BeamType,
 } from '../types';
+import { DEFAULT_BEAM_CUSTOMIZATION, DEFAULT_BEAM_UPGRADES } from '../game/beamSystem';
 import { sound } from '../game/audio';
 import {
   ArrowLeft,
@@ -27,6 +31,9 @@ import {
   Palette,
   Wind,
   Coins,
+  Crosshair,
+  Flame,
+  Radio,
 } from 'lucide-react';
 
 interface GarageViewProps {
@@ -37,6 +44,8 @@ interface GarageViewProps {
   currentThrusterColor?: ThrusterFlameColor;
   currentCockpitSkin?: CockpitSkin;
   currentUpgrades: ShipUpgrades;
+  currentBeamCustomization?: BeamCustomization;
+  currentBeamUpgrades?: BeamUpgrades;
   unlockedShips: string[];
   credits: number;
   playerLevel: number;
@@ -49,6 +58,8 @@ interface GarageViewProps {
   onSelectThrusterColor: (flame: ThrusterFlameColor) => void;
   onSelectCockpitSkin: (skin: CockpitSkin) => void;
   onPurchaseUpgrade: (type: UpgradeType, cost: number) => void;
+  onUpdateBeamCustomization?: (customization: BeamCustomization) => void;
+  onPurchaseBeamUpgrade?: (upgradeKey: keyof BeamUpgrades, cost: number) => void;
   onUnlockShip: (shipId: string, cost: number) => void;
   onBack: () => void;
 }
@@ -182,6 +193,93 @@ const UPGRADES_LIST = [
   },
 ];
 
+const BEAM_EMITTER_TYPES: { id: BeamType; name: string; desc: string; stats: string }[] = [
+  {
+    id: 'STANDARD',
+    name: 'Standard Pulse-Laser',
+    desc: 'Balanced military-grade collimated particle beam for versatile asteroid vaporization.',
+    stats: '100% DMG | 100% Heat | Balanced Range',
+  },
+  {
+    id: 'PULSE',
+    name: 'High-Frequency Burst',
+    desc: 'Rapid cyclic burst beam with accelerated cooling and high fire rate for dense asteroid swarms.',
+    stats: '85% DMG | -25% Heat | +35% Cycle Rate',
+  },
+  {
+    id: 'QUANTUM',
+    name: 'Quantum Lance (Heavy)',
+    desc: 'Massive focused antimatter beam that disintegrates dense planetary mantle rock in seconds.',
+    stats: '175% DMG | +40% Heat | Heavy Recoil',
+  },
+  {
+    id: 'PLASMA',
+    name: 'Plasma Arc Emitter',
+    desc: 'Superheated ionized gas channel delivering extreme continuous thermal destruction.',
+    stats: '140% DMG | +15% Heat | High Disruption',
+  },
+];
+
+const BEAM_COLOR_OPTIONS = [
+  { name: 'Neon Cyan', hex: '#00f0ff' },
+  { name: 'Crimson Surge', hex: '#ff0055' },
+  { name: 'Plasma Violet', hex: '#d000ff' },
+  { name: 'Solar Gold', hex: '#ffaa00' },
+  { name: 'Emerald Hyper', hex: '#00ff66' },
+  { name: 'Quantum Pink', hex: '#ff00a0' },
+];
+
+const BEAM_UPGRADE_ITEMS = [
+  {
+    key: 'power' as keyof BeamUpgrades,
+    name: 'Core Laser Output',
+    category: '(Damage & DPS)',
+    desc: 'Amplifies coherent photon flux to melt large asteroids significantly faster.',
+    boostText: '+20% Damage/Tier',
+    cost: 650,
+  },
+  {
+    key: 'range' as keyof BeamUpgrades,
+    name: 'Optic Focus Lenses',
+    category: '(Range & Reach)',
+    desc: 'Precision dielectric lenses extend beam effective reach down track.',
+    boostText: '+25m Max Range/Tier',
+    cost: 550,
+  },
+  {
+    key: 'cooling' as keyof BeamUpgrades,
+    name: 'Cryogenic Heat Sinks',
+    category: '(Cooling & Dissipation)',
+    desc: 'Liquid nitrogen heat pipes dissipate thermal buildup rapidly after firing.',
+    boostText: '+25% Cooldown Rate/Tier',
+    cost: 600,
+  },
+  {
+    key: 'energyCapacity' as keyof BeamUpgrades,
+    name: 'Capacitor Banks',
+    category: '(Energy & Duration)',
+    desc: 'High-density ultracapacitors allow sustained beam projection before depletion.',
+    boostText: '+20% Beam Energy/Tier',
+    cost: 500,
+  },
+  {
+    key: 'targeting' as keyof BeamUpgrades,
+    name: 'Assisted Target Lock',
+    category: '(Auto-Aim & Cone)',
+    desc: 'AI target tracking sensors widen auto-lock acquisition angle and reticle tracking.',
+    boostText: '+25% Target Cone/Tier',
+    cost: 700,
+  },
+  {
+    key: 'impactForce' as keyof BeamUpgrades,
+    name: 'Kinetic Shockwave Shifter',
+    category: '(Shatter Radius)',
+    desc: 'Emits a destructive explosive shockwave upon asteroid shatter, damaging adjacent debris.',
+    boostText: '+30% Shockwave Blast/Tier',
+    cost: 750,
+  },
+];
+
 export const GarageView: React.FC<GarageViewProps> = ({
   currentShipId,
   currentColor,
@@ -190,6 +288,8 @@ export const GarageView: React.FC<GarageViewProps> = ({
   currentThrusterColor = 'solar_gold',
   currentCockpitSkin = 'cyber_stealth',
   currentUpgrades,
+  currentBeamCustomization = DEFAULT_BEAM_CUSTOMIZATION,
+  currentBeamUpgrades = DEFAULT_BEAM_UPGRADES,
   unlockedShips,
   credits,
   playerLevel,
@@ -201,9 +301,13 @@ export const GarageView: React.FC<GarageViewProps> = ({
   onSelectDecal,
   onSelectThrusterColor,
   onPurchaseUpgrade,
+  onUpdateBeamCustomization,
+  onPurchaseBeamUpgrade,
   onBack,
 }) => {
-  const [activeTab, setActiveTab] = useState<'HULL_PAINT' | 'DECALS' | 'UPGRADES'>('HULL_PAINT');
+  const [activeTab, setActiveTab] = useState<
+    'HULL_PAINT' | 'DECALS' | 'UPGRADES' | 'BEAM_LAB'
+  >('HULL_PAINT');
   const [appliedFeedback, setAppliedFeedback] = useState(false);
   const [callsign, setCallsign] = useState(pilotName);
 
@@ -286,6 +390,25 @@ export const GarageView: React.FC<GarageViewProps> = ({
     );
     ship.position.set(0, -0.6, 0);
     ship.rotation.y = Math.PI * 0.15;
+
+    // Add forward beam emitter crystal & tactical point light
+    const emitterColor = currentBeamCustomization?.outerColor || '#00f0ff';
+    const emitterGeo = new THREE.CylinderGeometry(0.12, 0.22, 0.45, 12);
+    emitterGeo.rotateX(Math.PI / 2);
+    const emitterMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(emitterColor),
+      emissive: new THREE.Color(emitterColor),
+      emissiveIntensity: 2.2,
+      roughness: 0.2,
+    });
+    const emitterMesh = new THREE.Mesh(emitterGeo, emitterMat);
+    emitterMesh.position.set(0, 0.15, -2.4);
+    ship.add(emitterMesh);
+
+    const emitterLight = new THREE.PointLight(new THREE.Color(emitterColor), 3, 5);
+    emitterLight.position.set(0, 0.15, -2.6);
+    ship.add(emitterLight);
+
     scene.add(ship);
     shipGroupRef.current = ship;
 
@@ -350,6 +473,25 @@ export const GarageView: React.FC<GarageViewProps> = ({
     );
     newShip.position.set(0, -0.6, 0);
     newShip.rotation.y = Math.PI * 0.15;
+
+    // Add forward beam emitter crystal & tactical point light
+    const emitterColor = currentBeamCustomization?.outerColor || '#00f0ff';
+    const emitterGeo = new THREE.CylinderGeometry(0.12, 0.22, 0.45, 12);
+    emitterGeo.rotateX(Math.PI / 2);
+    const emitterMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(emitterColor),
+      emissive: new THREE.Color(emitterColor),
+      emissiveIntensity: 2.2,
+      roughness: 0.2,
+    });
+    const emitterMesh = new THREE.Mesh(emitterGeo, emitterMat);
+    emitterMesh.position.set(0, 0.15, -2.4);
+    newShip.add(emitterMesh);
+
+    const emitterLight = new THREE.PointLight(new THREE.Color(emitterColor), 3, 5);
+    emitterLight.position.set(0, 0.15, -2.6);
+    newShip.add(emitterLight);
+
     sceneRef.current.add(newShip);
     shipGroupRef.current = newShip;
   }, [
@@ -359,6 +501,7 @@ export const GarageView: React.FC<GarageViewProps> = ({
     currentDecal,
     currentThrusterColor,
     currentCockpitSkin,
+    currentBeamCustomization?.outerColor,
   ]);
 
   const handleApplyChanges = () => {
@@ -469,7 +612,22 @@ export const GarageView: React.FC<GarageViewProps> = ({
             }`}
           >
             <Zap className="w-3.5 h-3.5" />
-            <span>COMPONENT UPGRADES</span>
+            <span>UPGRADES</span>
+          </button>
+
+          <button
+            onClick={() => {
+              sound.playMenuClick();
+              setActiveTab('BEAM_LAB');
+            }}
+            className={`flex-1 py-2.5 px-2 rounded-xl font-ui font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${
+              activeTab === 'BEAM_LAB'
+                ? 'bg-gradient-to-r from-amber-400 to-rose-500 text-slate-950 shadow-[0_0_15px_rgba(255,170,0,0.4)]'
+                : 'bg-[#081222] border border-slate-800 text-slate-400 hover:text-white'
+            }`}
+          >
+            <Crosshair className="w-3.5 h-3.5 text-rose-400" />
+            <span>BEAM LAB</span>
           </button>
         </div>
 
@@ -732,6 +890,177 @@ export const GarageView: React.FC<GarageViewProps> = ({
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* TAB 4: BEAM LAB & WEAPONS OVERCLOCK */}
+        {activeTab === 'BEAM_LAB' && (
+          <div className="space-y-4 text-left">
+            {/* Emitter Core Architecture */}
+            <div>
+              <div className="text-[10px] font-mono font-bold text-amber-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+                <span>ASTEROID BEAM EMITTER CORE</span>
+                <span className="text-slate-400">
+                  ACTIVE: {currentBeamCustomization.type.toUpperCase()}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {BEAM_EMITTER_TYPES.map(emitter => {
+                  const isSelected = currentBeamCustomization.type === emitter.id;
+                  return (
+                    <button
+                      key={emitter.id}
+                      onClick={() => {
+                        sound.playMenuClick();
+                        onUpdateBeamCustomization?.({
+                          ...currentBeamCustomization,
+                          type: emitter.id,
+                        });
+                      }}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        isSelected
+                          ? 'bg-[#181104] border-amber-400 shadow-[0_0_12px_rgba(255,170,0,0.3)]'
+                          : 'bg-[#070e1b] border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span
+                          className={`font-ui font-black text-xs uppercase tracking-wider ${
+                            isSelected ? 'text-amber-300' : 'text-white'
+                          }`}
+                        >
+                          {emitter.name}
+                        </span>
+                        {isSelected && (
+                          <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                            EQUIPPED
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] font-mono text-slate-400 line-clamp-2 mb-1.5">
+                        {emitter.desc}
+                      </p>
+                      <div className="text-[9px] font-mono font-bold text-amber-400/90">
+                        {emitter.stats}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Beam Energy Color */}
+            <div>
+              <div className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-2">
+                PLASMA CORE COLOR FREQUENCY
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {BEAM_COLOR_OPTIONS.map(c => {
+                  const isChecked =
+                    currentBeamCustomization.outerColor.toLowerCase() === c.hex.toLowerCase();
+                  return (
+                    <button
+                      key={c.hex}
+                      onClick={() => {
+                        sound.playMenuClick();
+                        onUpdateBeamCustomization?.({
+                          ...currentBeamCustomization,
+                          outerColor: c.hex,
+                          particleColor: c.hex,
+                        });
+                      }}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-mono transition-all ${
+                        isChecked
+                          ? 'border-amber-400 bg-[#161208] text-white shadow-[0_0_10px_rgba(255,170,0,0.3)]'
+                          : 'border-slate-800 bg-[#070e1b] text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <span
+                        className="w-3 h-3 rounded-full border border-black/40 shadow-sm"
+                        style={{ backgroundColor: c.hex }}
+                      />
+                      <span>{c.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Beam Overclock Upgrades */}
+            <div>
+              <div className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-2">
+                WEAPON LAB OVERCLOCKING &amp; ENHANCEMENTS
+              </div>
+
+              <div className="space-y-2.5">
+                {BEAM_UPGRADE_ITEMS.map(up => {
+                  const currentLvl = currentBeamUpgrades[up.key] || 0;
+                  const isMax = currentLvl >= 5;
+                  const cost = up.cost * (currentLvl + 1);
+                  const canAfford = credits >= cost && !isMax;
+
+                  return (
+                    <div
+                      key={up.key}
+                      className="p-3.5 rounded-2xl bg-[#070e1b] border border-slate-800/90 text-left"
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-amber-400 font-mono text-xs">&gt;</span>
+                          <span className="font-ui font-black text-sm uppercase tracking-wider text-white">
+                            {up.name}
+                          </span>
+                          <span className="text-[11px] font-mono text-slate-400">{up.category}</span>
+                        </div>
+
+                        {/* 5 Pips */}
+                        <div className="flex items-center gap-1.5">
+                          {[1, 2, 3, 4, 5].map(pip => (
+                            <span
+                              key={pip}
+                              className={`w-2.5 h-2.5 rounded-full ${
+                                pip <= currentLvl
+                                  ? 'bg-amber-400 shadow-[0_0_6px_#ffaa00]'
+                                  : 'bg-slate-800 border border-slate-700'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-slate-400 leading-relaxed mb-3">{up.desc}</p>
+
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-mono font-bold text-amber-400">
+                          {up.boostText} (TIER {currentLvl}/5)
+                        </span>
+
+                        {isMax ? (
+                          <span className="py-1 px-3 rounded-lg bg-[#161208] border border-amber-500/40 text-[10px] font-mono font-bold text-amber-300 uppercase tracking-wider shadow-sm">
+                            MAX LEVEL
+                          </span>
+                        ) : (
+                          <button
+                            disabled={!canAfford}
+                            onClick={() => {
+                              sound.playUpgradePurchase();
+                              onPurchaseBeamUpgrade?.(up.key, cost);
+                            }}
+                            className={`py-1 px-3 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider transition-all ${
+                              canAfford
+                                ? 'bg-gradient-to-r from-amber-400 to-rose-500 text-slate-950 hover:brightness-110 shadow-[0_0_10px_rgba(255,170,0,0.3)] active:scale-95'
+                                : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                            }`}
+                          >
+                            UPGRADE ({cost.toLocaleString()} VC)
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
 

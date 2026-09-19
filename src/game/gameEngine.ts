@@ -34,7 +34,21 @@ import {
   BeamTelemetry,
 } from '../types';
 import { BeamSystem, DEFAULT_BEAM_CUSTOMIZATION, DEFAULT_BEAM_UPGRADES } from './beamSystem';
-import { Obstacle } from './trackData';
+import { Obstacle, SamplePoint } from './trackData';
+import {
+  JunctionManager,
+  ActiveJunctionTelemetry,
+  BranchRouteConfig,
+  BranchRouteDirection,
+  PlayerRouteProgress,
+} from './junctionSystem';
+import {
+  PlayerCollisionSystem,
+  PLAYER_COLLISION_CONFIG,
+  PlayerCollisionConfig,
+  CollisionParticipant,
+  CollisionEventFeedback,
+} from './collisionSystem';
 
 export interface LocalAIRacer {
   id: string;
@@ -61,6 +75,18 @@ export interface LocalAIRacer {
   rank: number;
   isDestroyed?: boolean;
   respawnTimer?: number;
+  activeRouteId?: string | null;
+  activeJunctionId?: string | null;
+  branchProgress?: number;
+  shield?: number;
+  hull?: number;
+  mass?: number;
+  radius?: number;
+  collisionCooldown?: number;
+  recoveryTimer?: number;
+  angularVelocity?: number;
+  angularDisplacement?: number;
+  invulnerableTimer?: number;
 }
 
 export interface GameEngineCallbacks {
@@ -89,6 +115,9 @@ export interface GameEngineCallbacks {
   onSpectatorTargetChange?: (pilotName: string) => void;
   onBeamTelemetry?: (telemetry: BeamTelemetry) => void;
   onAsteroidDestroyed?: (obstacle: Obstacle, points: number, credits: number) => void;
+  onJunctionTelemetry?: (telemetry: ActiveJunctionTelemetry | null) => void;
+  onRouteSelected?: (routeName: string, direction: BranchRouteDirection) => void;
+  onCollisionFeedback?: (feedback: CollisionEventFeedback) => void;
 }
 
 export class GameEngine {
@@ -97,6 +126,16 @@ export class GameEngine {
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   private animFrameId: number = 0;
+
+  // Dedicated Player-to-Player & AI Spacecraft Collision System
+  public collisionSystem: PlayerCollisionSystem;
+  private collisionFovPunch: number = 0;
+  private playerCollisionAngularVelocity: number = 0;
+  private playerCollisionAngularDisplacement: number = 0;
+  private playerCollisionRecoveryTimer: number = 0;
+
+  // Branching Path & Junction Switching System
+  public junctionManager: JunctionManager;
 
   // Asteroid Destruction Beam System
   public beamSystem: BeamSystem;
@@ -315,6 +354,10 @@ export class GameEngine {
     this.buildCreditsField();
     this.buildPowerUpPods();
 
+    // Initialize Branching Path & Junction Switching System
+    this.junctionManager = new JunctionManager(this.trackId, this.track);
+    this.scene.add(this.junctionManager.junctionMeshGroup);
+
     // Initialize Asteroid Destruction Beam System
     this.beamSystem = new BeamSystem(
       this.localBeamCustomization,
@@ -322,6 +365,31 @@ export class GameEngine {
       'STANDARD'
     );
     this.scene.add(this.beamSystem.containerGroup);
+
+    // Initialize Dedicated Player-to-Player & AI Spacecraft Collision System
+    this.collisionSystem = new PlayerCollisionSystem(this.scene);
+    this.collisionSystem.onCollisionFeedback = feedback => {
+      this.callbacks.onCollisionFeedback?.(feedback);
+    };
+    this.collisionSystem.onCameraShakeRequest = intensity => {
+      if (this.cameraShakeEnabled) {
+        this.cameraShake = Math.max(this.cameraShake, intensity);
+      }
+    };
+    this.collisionSystem.onCameraFovPunch = degrees => {
+      this.collisionFovPunch = Math.max(this.collisionFovPunch, degrees);
+    };
+    this.collisionSystem.onSoundTrigger = sndType => {
+      if (sndType === 'HEAVY_IMPACT') {
+        sound.playHeavyImpact();
+      } else if (sndType === 'SHIELD_IMPACT') {
+        sound.playShieldImpact();
+      } else if (sndType === 'SCRAPE') {
+        sound.playScrapeSparks();
+      } else {
+        sound.playCollision();
+      }
+    };
 
     // Resize Handler
     window.addEventListener('resize', this.onResize);
@@ -1290,6 +1358,10 @@ export class GameEngine {
     this.buildShortcutPortal();
     this.buildCreditsField();
     this.buildPowerUpPods();
+    if (this.junctionManager) {
+      this.junctionManager.mainTrack = this.track;
+      this.junctionManager.initJunctions(trackId);
+    }
     this.resetToStart();
   }
 
@@ -1631,54 +1703,172 @@ export class GameEngine {
       }
     }
 
-    if (this.collisionsEnabled && !this.isDestroyed && this.invulnerableTimer <= 0 && this.playerShipGroup && !this.isSpectator) {
-      const myPos = this.playerShipGroup.position;
+    // Dedicated Player-to-Player & AI Spacecraft Collision System
+    if (this.collisionsEnabled && this.playerShipGroup && !this.isSpectator) {
+      const pSample = this.track.getSampleAt(this.splineT);
+      const forwardDir = pSample.tangent.clone().negate();
+      const pSpeedMps = this.currentSpeed;
+      const pVel = forwardDir.clone().multiplyScalar(pSpeedMps);
 
-      // Collide with AI Racers
-      for (const ai of this.localAIRacers) {
-        if (ai.isDestroyed || !ai.group) continue;
-        const dist = myPos.distanceTo(ai.group.position);
-        if (dist < 3.2) {
-          const diff = this.lateralOffset - ai.currentLateral;
-          const pushDir = Math.sign(diff) || (Math.random() > 0.5 ? 1 : -1);
-          this.lateralOffset += pushDir * 3.5 * dt * 8;
-          ai.currentLateral -= pushDir * 3.5 * dt * 8;
-          if (this.collisionCooldown <= 0) {
-            sound.playCollision();
-            if (this.cameraShakeEnabled) this.cameraShake = 0.35;
-            const midPoint = myPos.clone().add(ai.group.position).multiplyScalar(0.5);
-            this.triggerCollisionBurst(midPoint, 0x00f0ff, 20);
-            this.currentSpeed = Math.max(10, this.currentSpeed * 0.92);
-            this.collisionCooldown = 0.35;
+      const pCfg = getShipConfig(this.localShipId);
+      const pMass =
+        pCfg.id === 'vortex_nemesis'
+          ? 1.45
+          : pCfg.id === 'apex_phantom'
+          ? 0.95
+          : pCfg.id === 'solaris_stinger'
+          ? 0.85
+          : 1.15;
 
-            if (this.damageMode !== 'CASUAL') {
-              const zone = diff > 0 ? 'leftWing' : 'rightWing';
-              this.applyZoneDamage(zone, this.damageMode === 'HARDCORE' ? 14 : 7);
-            }
+      const playerParticipant: CollisionParticipant = {
+        id: 'player',
+        category: 'PLAYER',
+        name: 'Player',
+        position: this.playerShipGroup.position,
+        velocity: pVel,
+        speed: pSpeedMps,
+        direction: forwardDir,
+        radius: 2.6,
+        mass: pMass,
+        shield: this.phaseShieldTimer > 0 ? 100 : this.damageZones.shieldCore,
+        hull: this.hullHealth,
+        isBoosting: this.isBoosting,
+        collisionCooldown: this.collisionCooldown,
+        recoveryTimer: this.playerCollisionRecoveryTimer,
+        angularVelocity: this.playerCollisionAngularVelocity,
+        angularDisplacement: this.playerCollisionAngularDisplacement,
+        lateralOffset: this.lateralOffset,
+        splineT: this.splineT,
+        invulnerableTimer: this.invulnerableTimer,
+        isDestroyed: this.isDestroyed,
+        meshGroup: this.playerShipGroup,
+        applyDamage: (shieldLoss, hullLoss, impactForce) => {
+          if (shieldLoss > 0) {
+            this.damageZones.shieldCore = Math.max(0, this.damageZones.shieldCore - shieldLoss);
           }
-        }
+          if (hullLoss > 0) {
+            this.hullHealth = Math.max(0, this.hullHealth - hullLoss);
+            this.callbacks.onHullUpdate?.(this.hullHealth);
+            const zone = Math.random() > 0.5 ? 'leftWing' : 'rightWing';
+            this.applyZoneDamage(zone, hullLoss);
+          }
+          this.callbacks.onDamageZonesUpdate?.({ ...this.damageZones });
+        },
+        onCrash: reason => {
+          this.destroyPlayerShip(reason);
+        },
+      };
+
+      this.collisionSystem.registerParticipant(playerParticipant);
+
+      // Register / update AI Participants
+      for (const ai of this.localAIRacers) {
+        if (!ai.group) continue;
+        const aiSample = this.track.getSampleAt(ai.t);
+        const aiDir = aiSample.tangent.clone().negate();
+        const aiVel = aiDir.clone().multiplyScalar(ai.speed);
+        const aiMass =
+          ai.shipId === 'vortex_nemesis'
+            ? 1.4
+            : ai.shipId === 'apex_phantom'
+            ? 0.95
+            : ai.shipId === 'solaris_stinger'
+            ? 0.85
+            : 1.1;
+
+        const aiParticipant: CollisionParticipant = {
+          id: ai.id,
+          category: 'AI_PLAYER',
+          name: ai.name,
+          position: ai.group.position,
+          velocity: aiVel,
+          speed: ai.speed,
+          direction: aiDir,
+          radius: 2.5,
+          mass: aiMass,
+          shield: ai.shield ?? 100,
+          hull: ai.hull ?? 100,
+          isBoosting: ai.isBoosting,
+          collisionCooldown: ai.collisionCooldown ?? 0,
+          recoveryTimer: ai.recoveryTimer ?? 0,
+          angularVelocity: ai.angularVelocity ?? 0,
+          angularDisplacement: ai.angularDisplacement ?? 0,
+          lateralOffset: ai.currentLateral,
+          splineT: ai.t,
+          invulnerableTimer: ai.invulnerableTimer ?? 0,
+          isDestroyed: !!ai.isDestroyed,
+          meshGroup: ai.group,
+          applyDamage: (shieldLoss, hullLoss) => {
+            ai.shield = Math.max(0, (ai.shield ?? 100) - shieldLoss);
+            ai.hull = Math.max(0, (ai.hull ?? 100) - hullLoss);
+          },
+          onCrash: () => {
+            ai.isDestroyed = true;
+            ai.respawnTimer = 2.0;
+            ai.group.visible = false;
+            this.triggerCollisionBurst(ai.group.position, 0xff0055, 40);
+          },
+        };
+
+        this.collisionSystem.registerParticipant(aiParticipant);
       }
 
-      // Collide with Remote Multiplayer Ships
-      for (const [, remote] of this.remoteShips.entries()) {
+      // Register / update Remote Multiplayer Ships
+      for (const [pid, remote] of this.remoteShips.entries()) {
         if (!remote.group) continue;
-        const dist = myPos.distanceTo(remote.group.position);
-        if (dist < 3.2) {
-          const deltaX = myPos.x - remote.group.position.x;
-          const pushDir = Math.sign(deltaX) || (Math.random() > 0.5 ? 1 : -1);
-          this.lateralOffset += pushDir * 3.5 * dt * 8;
-          if (this.collisionCooldown <= 0) {
-            sound.playCollision();
-            if (this.cameraShakeEnabled) this.cameraShake = 0.4;
-            const midPoint = myPos.clone().add(remote.group.position).multiplyScalar(0.5);
-            this.triggerCollisionBurst(midPoint, 0xff00aa, 22);
-            this.currentSpeed = Math.max(10, this.currentSpeed * 0.90);
-            this.collisionCooldown = 0.35;
+        const remotePos = remote.group.position;
+        const remoteDir = new THREE.Vector3(0, 0, -1).applyQuaternion(remote.group.quaternion);
+        this.collisionSystem.registerParticipant({
+          id: pid,
+          category: 'REMOTE_PLAYER',
+          name: `Racer_${pid.slice(0, 4)}`,
+          position: remotePos,
+          velocity: remoteDir.clone().multiplyScalar(40),
+          speed: 40,
+          direction: remoteDir,
+          radius: 2.5,
+          mass: 1.1,
+          shield: 100,
+          hull: 100,
+          isBoosting: false,
+          collisionCooldown: 0,
+          recoveryTimer: 0,
+          angularVelocity: 0,
+          angularDisplacement: 0,
+          lateralOffset: 0,
+          splineT: this.splineT,
+          invulnerableTimer: 0,
+          isDestroyed: false,
+          meshGroup: remote.group,
+        });
+      }
 
-            if (this.damageMode !== 'CASUAL') {
-              this.applyZoneDamage('frontHull', this.damageMode === 'HARDCORE' ? 15 : 8);
-            }
-          }
+      // Run dedicated collision evaluation & resolution
+      this.collisionSystem.update(dt);
+
+      // Read back state from player participant
+      const updatedPlayer = this.collisionSystem.getParticipant('player');
+      if (updatedPlayer) {
+        this.lateralOffset = updatedPlayer.lateralOffset;
+        this.currentSpeed = updatedPlayer.speed;
+        this.collisionCooldown = updatedPlayer.collisionCooldown;
+        this.playerCollisionAngularVelocity = updatedPlayer.angularVelocity;
+        this.playerCollisionAngularDisplacement = updatedPlayer.angularDisplacement;
+        this.playerCollisionRecoveryTimer = updatedPlayer.recoveryTimer;
+      }
+
+      // Read back state to AI participants
+      for (const ai of this.localAIRacers) {
+        const updatedAI = this.collisionSystem.getParticipant(ai.id);
+        if (updatedAI) {
+          ai.currentLateral = updatedAI.lateralOffset;
+          ai.speed = updatedAI.speed;
+          ai.collisionCooldown = updatedAI.collisionCooldown;
+          ai.angularVelocity = updatedAI.angularVelocity;
+          ai.angularDisplacement = updatedAI.angularDisplacement;
+          ai.recoveryTimer = updatedAI.recoveryTimer;
+          ai.shield = updatedAI.shield;
+          ai.hull = updatedAI.hull;
         }
       }
     }
@@ -1695,14 +1885,56 @@ export class GameEngine {
       }
     }
 
+    if (this.input.selectRouteDirection) {
+      const success = this.junctionManager.selectRouteByDirection(this.input.selectRouteDirection);
+      if (success) {
+        sound.playMenuClick();
+        const selRoute = this.junctionManager.activeJunctionTelemetry?.availableRoutes.find(
+          r => r.id === this.junctionManager.playerRouteProgress.activeRouteId
+        );
+        if (selRoute) {
+          this.callbacks.onRouteSelected?.(selRoute.name, selRoute.direction);
+        }
+      }
+      this.input.selectRouteDirection = undefined;
+    }
+
     if (this.input.recover) {
       this.lateralOffset = 0;
       this.currentSpeed = 20;
       this.input.recover = false;
     }
 
-    const progressAdvance = (this.currentSpeed * dt) / this.track.totalLength;
-    this.splineT = (this.splineT + progressAdvance) % 1.0;
+    if (this.junctionManager.playerRouteProgress.isInBranch) {
+      const branchUpdate = this.junctionManager.updateRouteProgress(dt, this.currentSpeed, (cpIndices) => {
+        cpIndices.forEach(cpIdx => {
+          this.checkpointsPassedThisLap.add(cpIdx);
+          if (this.nextCheckpointIdx === cpIdx) {
+            this.nextCheckpointIdx = (this.nextCheckpointIdx + 1) % this.track.checkpoints.length;
+            this.callbacks.onCheckpointUpdate(this.nextCheckpointIdx, this.track.checkpoints.length);
+          }
+        });
+      });
+
+      if (branchUpdate.finishedBranch) {
+        this.splineT = branchUpdate.rejoinSplineT;
+        this.callbacks.onShortcutUsed?.(this.junctionManager.feedbackMessage || 'ROUTE COMPLETED');
+        sound.playCheckpoint();
+      } else {
+        const junc = this.junctionManager.junctions.get(this.junctionManager.playerRouteProgress.activeJunctionId || '');
+        if (junc) {
+          const startT = junc.config.junctionStartT;
+          const endT = junc.config.junctionEndT;
+          const effEndT = endT < startT ? endT + 1.0 : endT;
+          const interpT = startT + this.junctionManager.playerRouteProgress.progress * (effEndT - startT);
+          this.splineT = ((interpT % 1.0) + 1.0) % 1.0;
+        }
+      }
+    } else {
+      const progressAdvance = (this.currentSpeed * dt) / this.track.totalLength;
+      this.splineT = (this.splineT + progressAdvance) % 1.0;
+    }
+
     this.totalDistanceTraveled += this.currentSpeed * dt;
 
     const distM = Math.floor(this.totalDistanceTraveled);
@@ -1776,6 +2008,8 @@ export class GameEngine {
         lap: this.currentLap,
         currentCheckpoint: this.nextCheckpointIdx,
         progressDistance: this.totalDistanceTraveled,
+        currentRouteId: this.junctionManager.playerRouteProgress.activeRouteId,
+        junctionId: this.junctionManager.playerRouteProgress.activeJunctionId,
       };
       networkClient.sendPlayerUpdate(raceState);
     }
@@ -1783,8 +2017,28 @@ export class GameEngine {
 
   private updateShipTransform(dt: number) {
     if (!this.playerShipGroup) return;
-    const sample = this.track.getSampleAt(this.splineT);
+
+    let sample: SamplePoint;
     const hoverHeight = 1.6 + Math.sin(Date.now() * 0.006) * 0.15;
+    const prp = this.junctionManager.playerRouteProgress;
+
+    if (prp.isInBranch && prp.branchRouteInstance) {
+      const branchSample = prp.branchRouteInstance.getSampleAt(prp.progress);
+      if (prp.transitionBlend < 1.0) {
+        const mainSample = this.track.getSampleAt(this.splineT);
+        const tBlend = prp.transitionBlend;
+        const blendedPoint = mainSample.point.clone().lerp(branchSample.point, tBlend);
+        const blendedTangent = mainSample.tangent.clone().lerp(branchSample.tangent, tBlend).normalize();
+        const blendedNormal = mainSample.normal.clone().lerp(branchSample.normal, tBlend).normalize();
+        const blendedBinormal = mainSample.binormal.clone().lerp(branchSample.binormal, tBlend).normalize();
+        sample = { t: prp.progress, point: blendedPoint, tangent: blendedTangent, normal: blendedNormal, binormal: blendedBinormal };
+      } else {
+        sample = branchSample;
+      }
+    } else {
+      sample = this.track.getSampleAt(this.splineT);
+    }
+
     const shipPos = sample.point
       .clone()
       .add(sample.binormal.clone().multiplyScalar(this.lateralOffset))
@@ -1799,6 +2053,9 @@ export class GameEngine {
     rotMatrix.makeBasis(sample.binormal, sample.normal, sample.tangent.clone().negate());
     this.playerShipGroup.quaternion.setFromRotationMatrix(rotMatrix);
     this.playerShipGroup.rotateZ(this.shipRoll);
+    if (Math.abs(this.playerCollisionAngularDisplacement) > 0.001) {
+      this.playerShipGroup.rotateY(this.playerCollisionAngularDisplacement);
+    }
 
     const flameScale = 0.8 + this.currentSpeed / 40 + (this.isBoosting ? 1.6 : 0);
     this.playerThrusters.forEach(flame => {
@@ -1810,6 +2067,7 @@ export class GameEngine {
     if (!this.playerShipGroup || !this.isRacing || this.hasFinished) return;
     const shipPos = this.playerShipGroup.position;
 
+    // Check main track boost pads
     for (const pad of this.track.boostPads) {
       if (shipPos.distanceTo(pad.position) < 8.0) {
         const shipConfig = getEffectiveShipStats(
@@ -1821,6 +2079,24 @@ export class GameEngine {
         this.cameraShake = 0.4;
         sound.playBoostPad();
         break;
+      }
+    }
+
+    // Check branch route boost pads
+    const prp = this.junctionManager.playerRouteProgress;
+    if (prp.isInBranch && prp.branchRouteInstance) {
+      for (const padPos of prp.branchRouteInstance.boostPadPositions) {
+        if (shipPos.distanceTo(padPos) < 7.5) {
+          const shipConfig = getEffectiveShipStats(
+            getShipConfig(this.localShipId),
+            this.localUpgrades
+          );
+          this.currentSpeed = Math.min((shipConfig.topSpeed / 3.6) * 1.6, this.currentSpeed + 28);
+          this.boostEnergy = Math.min(100, this.boostEnergy + 25);
+          this.cameraShake = 0.45;
+          sound.playBoostPad();
+          break;
+        }
       }
     }
 
@@ -2062,9 +2338,10 @@ export class GameEngine {
     this.cameraRoll = THREE.MathUtils.lerp(this.cameraRoll, targetCamRoll, 0.12);
     this.camera.rotateZ(this.cameraRoll);
 
-    const desiredFov = this.isBoosting ? 82 : this.cameraMode === 'COCKPIT' ? 74 : 65;
-    this.targetFov = THREE.MathUtils.lerp(this.targetFov, desiredFov, 0.1);
-    if (Math.abs(this.camera.fov - this.targetFov) > 0.1) {
+    const desiredFov = (this.isBoosting ? 82 : this.cameraMode === 'COCKPIT' ? 74 : 65) + this.collisionFovPunch;
+    this.collisionFovPunch = Math.max(0, this.collisionFovPunch - dt * 22);
+    this.targetFov = THREE.MathUtils.lerp(this.targetFov, desiredFov, 0.16);
+    if (Math.abs(this.camera.fov - this.targetFov) > 0.05) {
       this.camera.fov = this.targetFov;
       this.camera.updateProjectionMatrix();
     }
@@ -2837,6 +3114,15 @@ export class GameEngine {
       const nameplate = this.createNameplateSprite(p.name, rankStr, p.color, p.personality);
       shipGroup.add(nameplate);
 
+      const aiMass =
+        p.shipId === 'vortex_nemesis'
+          ? 1.4
+          : p.shipId === 'apex_phantom'
+          ? 0.95
+          : p.shipId === 'solaris_stinger'
+          ? 0.85
+          : 1.1;
+
       this.localAIRacers.push({
         id: `local_ai_${i}`,
         name: p.name,
@@ -2862,6 +3148,15 @@ export class GameEngine {
         isDestroyed: false,
         respawnTimer: 0,
         rank: rankNum,
+        shield: 100,
+        hull: 100,
+        mass: aiMass,
+        radius: 2.5,
+        invulnerableTimer: 0,
+        collisionCooldown: 0,
+        recoveryTimer: 0,
+        angularVelocity: 0,
+        angularDisplacement: 0,
       });
     }
   }
@@ -2962,9 +3257,22 @@ export class GameEngine {
           ai.group.visible = true;
           ai.targetLateral = 0;
           ai.currentLateral = 0;
+          ai.shield = 100;
+          ai.hull = 100;
+          ai.invulnerableTimer = 2.5;
+          ai.speed = 20;
+          ai.angularVelocity = 0;
+          ai.angularDisplacement = 0;
           this.triggerCollisionBurst(ai.group.position, 0x00f0ff, 25);
         }
         continue;
+      }
+
+      if (ai.invulnerableTimer && ai.invulnerableTimer > 0) {
+        ai.invulnerableTimer = Math.max(0, ai.invulnerableTimer - dt);
+        ai.group.visible = Math.floor(Date.now() / 80) % 2 === 0;
+      } else if (!ai.group.visible) {
+        ai.group.visible = true;
       }
 
       if (ai.isBoosting) {
@@ -3050,15 +3358,54 @@ export class GameEngine {
 
       if (ai.isDestroyed) continue;
 
-      const advanceMeters = ai.speed * dt;
-      ai.progressDistance += advanceMeters;
-      const prevT = ai.t;
-      ai.t = (ai.progressDistance % trackLen) / trackLen;
-      if (prevT > 0.85 && ai.t < 0.15) {
-        ai.currentLap++;
+      // AI Junction Evaluation & Branch Progression
+      const nearbyJunc = this.junctionManager.detectNearbyJunction(ai.t);
+      if (nearbyJunc && !ai.activeRouteId) {
+        ai.activeJunctionId = nearbyJunc.junction.config.id;
+        ai.activeRouteId = this.junctionManager.getAIRouteChoice(
+          nearbyJunc.junction,
+          ai.personality,
+          ai.difficulty,
+          ai.speed * 3.6,
+          100
+        );
+        ai.branchProgress = 0;
       }
 
-      const sample = this.track.getSampleAt(ai.t);
+      let sample: SamplePoint;
+      if (ai.activeRouteId && ai.activeJunctionId) {
+        const junc = this.junctionManager.junctions.get(ai.activeJunctionId);
+        const routeInst = junc?.routeInstances.get(ai.activeRouteId);
+        if (routeInst && junc) {
+          ai.branchProgress = (ai.branchProgress || 0) + (ai.speed * dt) / routeInst.totalLength;
+          if (ai.branchProgress >= 1.0) {
+            ai.t = junc.config.junctionEndT;
+            ai.activeRouteId = null;
+            ai.activeJunctionId = null;
+            ai.branchProgress = 0;
+            sample = this.track.getSampleAt(ai.t);
+          } else {
+            sample = routeInst.getSampleAt(ai.branchProgress);
+            const startT = junc.config.junctionStartT;
+            const endT = junc.config.junctionEndT;
+            const effEndT = endT < startT ? endT + 1.0 : endT;
+            const interpT = startT + ai.branchProgress * (effEndT - startT);
+            ai.t = ((interpT % 1.0) + 1.0) % 1.0;
+          }
+        } else {
+          sample = this.track.getSampleAt(ai.t);
+        }
+      } else {
+        const advanceMeters = ai.speed * dt;
+        ai.progressDistance += advanceMeters;
+        const prevT = ai.t;
+        ai.t = (ai.progressDistance % trackLen) / trackLen;
+        if (prevT > 0.85 && ai.t < 0.15) {
+          ai.currentLap++;
+        }
+        sample = this.track.getSampleAt(ai.t);
+      }
+
       const hoverH = 1.5 + Math.sin(time + i) * 0.12;
       const botPos = sample.point
         .clone()
@@ -3073,6 +3420,9 @@ export class GameEngine {
       const lateralVel = (ai.targetLateral - ai.currentLateral);
       const bankRoll = -Math.sign(lateralVel) * Math.min(0.45, Math.abs(lateralVel) * 0.1);
       ai.group.rotateZ(bankRoll);
+      if (ai.angularDisplacement && Math.abs(ai.angularDisplacement) > 0.001) {
+        ai.group.rotateY(ai.angularDisplacement);
+      }
 
       const flameScale = 0.8 + (ai.speed * 3.6) / 120 + (ai.isBoosting ? 1.5 : 0);
       ai.thrusters.forEach(fl => fl.scale.set(1 + (ai.isBoosting ? 0.5 : 0), flameScale, 1 + (ai.isBoosting ? 0.5 : 0)));
@@ -3136,10 +3486,22 @@ export class GameEngine {
       this.updateSpeedParticles();
       this.updateAsteroids(dt);
       this.updateBeamSystem(dt);
+      this.updateJunctions(dt);
     }
 
     this.renderer.render(this.scene, this.camera);
   };
+
+  private updateJunctions(dt: number) {
+    if (!this.junctionManager) return;
+    const telemetry = this.junctionManager.update(
+      dt,
+      this.totalTimeElapsed,
+      this.splineT,
+      this.currentSpeed
+    );
+    this.callbacks.onJunctionTelemetry?.(telemetry);
+  }
 
   private updateBeamSystem(dt: number) {
     if (!this.beamSystem || !this.playerShipGroup) return;

@@ -174,7 +174,16 @@ export interface PlayerInput {
   drift: boolean;   // Shift
   recover: boolean; // R
   fireBeam?: boolean; // E / Right Mouse Button / Mobile ⚡ button
+  selectRouteDirection?: 'LEFT' | 'RIGHT' | 'CENTER' | 'SHORTCUT'; // Branching path selection
 }
+
+export type {
+  BranchRouteDirection,
+  BranchRouteConfig,
+  JunctionZoneConfig,
+  ActiveJunctionTelemetry,
+  PlayerRouteProgress,
+} from './game/junctionSystem';
 
 // Asteroid Destruction Beam System Types
 export type BeamType =
@@ -309,6 +318,8 @@ export interface PlayerRaceState {
   progressDistance: number;
   finishTime?: number;
   rank?: number;
+  currentRouteId?: string | null;
+  junctionId?: string | null;
 }
 
 export interface PlayerInfo {
@@ -544,6 +555,8 @@ export interface PlayerProgression {
     totalDriftSeconds: number;
     asteroidsAvoided: number;
     asteroidsDestroyed?: number;
+    beamShotsFired?: number;
+    maxAsteroidCombo?: number;
   };
 }
 
@@ -577,3 +590,32 @@ export interface StoryMission {
   unlocked: boolean;
   completed: boolean;
 }
+
+export type CollisionCategory = 'PLAYER' | 'AI_PLAYER' | 'REMOTE_PLAYER';
+
+export interface PlayerCollisionConfig {
+  baseImpactForce: number;
+  maxImpactForce: number;
+  knockbackMultiplier: number;
+  rotationMultiplier: number;
+  shieldDamageMultiplier: number;
+  hullDamageMultiplier: number;
+  crashThreshold: number;
+  collisionCooldown: number;
+  recoveryTime: number;
+  boostMultiplier: number;
+  maxKnockback: number;
+  maxAngularVelocity: number;
+}
+
+export interface CollisionEventFeedback {
+  id: string;
+  type: 'IMPACT' | 'HEAVY_IMPACT' | 'RIVAL_CRASHED' | 'CRITICAL_CRASH';
+  title: string;
+  detail?: string;
+  shieldDelta?: number;
+  hullDelta?: number;
+  impactForce: number;
+  timestamp: number;
+}
+

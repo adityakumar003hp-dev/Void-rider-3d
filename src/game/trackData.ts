@@ -1,6 +1,14 @@
 import * as THREE from 'three';
 import { DynamicTrackEvent, TrackId, PowerUpType } from '../types';
 
+export interface SamplePoint {
+  t: number;
+  point: THREE.Vector3;
+  tangent: THREE.Vector3;
+  normal: THREE.Vector3;
+  binormal: THREE.Vector3;
+}
+
 export interface CheckpointGate {
   id: number;
   position: THREE.Vector3;

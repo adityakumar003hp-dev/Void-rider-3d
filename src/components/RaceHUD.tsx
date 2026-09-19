@@ -22,6 +22,8 @@ import {
   Crosshair,
 } from 'lucide-react';
 import { ActivePowerUp, BeamTelemetry, CameraMode, DynamicTrackEvent, PlayerInput, ShipDamageZones } from '../types';
+import { ActiveJunctionTelemetry, BranchRouteDirection } from '../game/junctionSystem';
+import { JunctionHUD } from './JunctionHUD';
 
 interface RaceHUDProps {
   speed: number;
@@ -57,6 +59,8 @@ interface RaceHUDProps {
   onInputChange?: (input: Partial<PlayerInput>) => void;
   onRecover?: () => void;
   beamTelemetry?: BeamTelemetry | null;
+  junctionTelemetry?: ActiveJunctionTelemetry | null;
+  onSelectRoute?: (direction: BranchRouteDirection) => void;
 }
 
 const SECTOR_NAMES: Record<string, string> = {
@@ -103,6 +107,8 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
   onInputChange,
   onRecover,
   beamTelemetry,
+  junctionTelemetry,
+  onSelectRoute,
 }) => {
   // Joystick State
   const [stickPos, setStickPos] = useState({ x: 0, y: 0 });
@@ -723,7 +729,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           </div>
 
           {/* Boost Fuel Card */}
-          <div className="w-44 sm:w-48 bg-[#050b14]/90 border border-cyan-500/40 rounded-2xl p-2 sm:p-2.5 backdrop-blur-md shadow-[0_0_15px_rgba(0,240,255,0.2)] mb-3">
+          <div className="w-44 sm:w-48 bg-[#050b14]/90 border border-cyan-500/40 rounded-2xl p-2 sm:p-2.5 backdrop-blur-md shadow-[0_0_15px_rgba(0,240,255,0.2)] mb-2">
             <div className="flex justify-between items-center text-xs font-mono mb-1">
               <span className="text-[9px] font-mono font-bold text-slate-200 uppercase tracking-wider">
                 BOOST FUEL
@@ -757,8 +763,61 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
             </div>
           </div>
 
-          {/* Drift & Boost Action Buttons */}
-          <div className="flex items-center gap-3">
+          {/* Beam Weapon Status Card */}
+          {beamTelemetry && (
+            <div
+              className={`w-44 sm:w-48 bg-[#050b14]/90 border rounded-2xl p-2 sm:p-2.5 backdrop-blur-md shadow-[0_0_15px_rgba(255,0,85,0.2)] mb-3 transition-colors ${
+                beamTelemetry.isOverheated ? 'border-rose-500 bg-rose-950/30' : 'border-rose-500/40'
+              }`}
+            >
+              <div className="flex justify-between items-center text-xs font-mono mb-1">
+                <span className="text-[9px] font-mono font-bold text-rose-300 uppercase tracking-wider flex items-center gap-1">
+                  <Zap className="w-2.5 h-2.5 text-rose-400" />
+                  BEAM ENERGY
+                </span>
+                <span className="text-[11px] font-mono font-black text-rose-400">
+                  {Math.round(beamTelemetry.energy)}%
+                </span>
+              </div>
+              <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800/80 mb-1.5">
+                <div
+                  className="h-full bg-gradient-to-r from-rose-600 via-rose-500 to-amber-400 rounded-full shadow-[0_0_10px_#ff0055] transition-all duration-75"
+                  style={{ width: `${Math.max(0, Math.min(100, beamTelemetry.energy))}%` }}
+                />
+              </div>
+              <div className="flex justify-between items-center text-[8px] font-mono font-bold tracking-wider">
+                <span
+                  className={
+                    beamTelemetry.isOverheated
+                      ? 'text-rose-400 font-black animate-pulse'
+                      : 'text-slate-400 uppercase'
+                  }
+                >
+                  {beamTelemetry.isOverheated
+                    ? `OVERHEATED (${beamTelemetry.cooldownRemaining.toFixed(1)}s)`
+                    : 'CORE HEAT'}
+                </span>
+                <span
+                  className={`text-[9px] font-mono font-black ${
+                    beamTelemetry.heat > 75 ? 'text-rose-400 animate-pulse' : 'text-slate-300'
+                  }`}
+                >
+                  {Math.round(beamTelemetry.heat)}%
+                </span>
+              </div>
+              <div className="w-full h-1 bg-slate-900 rounded-full overflow-hidden mt-1 border border-slate-800/60">
+                <div
+                  className={`h-full transition-all duration-75 ${
+                    beamTelemetry.heat > 75 ? 'bg-rose-500' : 'bg-amber-400'
+                  }`}
+                  style={{ width: `${Math.max(0, Math.min(100, beamTelemetry.heat))}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Drift, Beam & Boost Action Buttons */}
+          <div className="flex items-center gap-2.5 sm:gap-3">
             {/* Drift Button */}
             <button
               onPointerDown={e => {
@@ -772,12 +831,69 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
               onPointerLeave={() => {
                 onInputChange?.({ drift: false });
               }}
-              className="w-14 h-14 rounded-full border-2 border-fuchsia-400 bg-fuchsia-950/80 text-fuchsia-300 flex flex-col items-center justify-center shadow-[0_0_20px_rgba(217,70,239,0.4)] active:scale-95 active:bg-fuchsia-500 active:text-slate-950 transition-all cursor-pointer"
+              className="w-13 h-13 sm:w-14 sm:h-14 rounded-full border-2 border-fuchsia-400 bg-fuchsia-950/80 text-fuchsia-300 flex flex-col items-center justify-center shadow-[0_0_20px_rgba(217,70,239,0.4)] active:scale-95 active:bg-fuchsia-500 active:text-slate-950 transition-all cursor-pointer"
               title="Drift Brake [SHIFT]"
             >
-              <Wind className="w-5 h-5 mb-0.5" />
-              <span className="text-[9px] font-ui font-black uppercase tracking-wider">
+              <Wind className="w-4 h-4 sm:w-5 sm:h-5 mb-0.5" />
+              <span className="text-[8px] sm:text-[9px] font-ui font-black uppercase tracking-wider">
                 DRIFT
+              </span>
+            </button>
+
+            {/* Front Asteroid Beam Button */}
+            <button
+              onPointerDown={e => {
+                e.preventDefault();
+                if (!beamTelemetry?.isOverheated && (beamTelemetry?.energy ?? 100) > 3) {
+                  onInputChange?.({ fireBeam: true });
+                }
+              }}
+              onPointerUp={e => {
+                e.preventDefault();
+                onInputChange?.({ fireBeam: false });
+              }}
+              onPointerLeave={() => {
+                onInputChange?.({ fireBeam: false });
+              }}
+              disabled={beamTelemetry?.isOverheated || (beamTelemetry?.energy ?? 100) <= 3}
+              className={`relative w-15 h-15 sm:w-16 sm:h-16 rounded-full border-2 flex flex-col items-center justify-center shadow-[0_0_25px_rgba(255,0,85,0.4)] active:scale-95 transition-all cursor-pointer overflow-hidden ${
+                beamTelemetry?.isFiring
+                  ? 'bg-rose-500 text-white border-white shadow-[0_0_35px_#ff0055] scale-95 ring-4 ring-rose-400/50'
+                  : beamTelemetry?.isOverheated
+                  ? 'bg-rose-950/40 border-rose-900 text-rose-700/60 opacity-60 cursor-not-allowed'
+                  : (beamTelemetry?.energy ?? 100) <= 3
+                  ? 'bg-slate-950/60 border-slate-800 text-slate-600 cursor-not-allowed'
+                  : 'bg-rose-950/90 border-rose-400 text-rose-300 active:bg-rose-500 active:text-slate-950'
+              }`}
+              title="Fire Front Asteroid Destruction Beam [E / RMB]"
+            >
+              {/* Cooldown overlay when overheated */}
+              {beamTelemetry?.isOverheated && (
+                <div className="absolute inset-0 bg-rose-950/95 flex flex-col items-center justify-center p-0.5 z-10">
+                  <span className="text-[7px] font-mono font-black text-rose-400 leading-tight animate-pulse">
+                    COOLDOWN
+                  </span>
+                  <span className="text-[9px] font-mono font-bold text-white leading-tight">
+                    {beamTelemetry.cooldownRemaining.toFixed(1)}s
+                  </span>
+                </div>
+              )}
+
+              {/* Target lock ping pip */}
+              {beamTelemetry?.hasTargetLock && !beamTelemetry.isOverheated && (
+                <div className="absolute top-1 right-2 w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_#39ff14] animate-ping" />
+              )}
+
+              <Zap
+                className={`w-4 h-4 sm:w-5 sm:h-5 ${
+                  beamTelemetry?.isFiring ? 'animate-bounce text-white drop-shadow-[0_0_10px_#fff]' : ''
+                }`}
+              />
+              <span className="text-[9px] sm:text-[10px] font-ui font-black uppercase tracking-wider leading-none mt-0.5">
+                ⚡ BEAM
+              </span>
+              <span className="text-[7px] font-mono font-bold text-rose-300/80 uppercase tracking-wider leading-none mt-0.5">
+                [E]
               </span>
             </button>
 
@@ -795,7 +911,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
                 onInputChange?.({ boost: false });
               }}
               disabled={boost <= 5}
-              className={`w-16 h-16 rounded-full border-2 flex flex-col items-center justify-center shadow-[0_0_25px_rgba(0,240,255,0.4)] active:scale-95 transition-all cursor-pointer ${
+              className={`w-15 h-15 sm:w-16 sm:h-16 rounded-full border-2 flex flex-col items-center justify-center shadow-[0_0_25px_rgba(0,240,255,0.4)] active:scale-95 transition-all cursor-pointer ${
                 speed > 250
                   ? 'bg-cyan-400 text-slate-950 border-white shadow-[0_0_35px_#00f0ff]'
                   : boost > 5
@@ -804,8 +920,8 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
               }`}
               title="Hyper-Boost [SPACE]"
             >
-              <ChevronsUp className="w-6 h-6 leading-none" />
-              <span className="text-[11px] font-ui font-black uppercase tracking-widest leading-none mt-0.5">
+              <ChevronsUp className="w-5 h-5 sm:w-6 sm:h-6 leading-none" />
+              <span className="text-[10px] sm:text-[11px] font-ui font-black uppercase tracking-widest leading-none mt-0.5">
                 BOOST
               </span>
               <span className="text-[7px] font-mono font-bold text-cyan-400/80 uppercase tracking-wider leading-none mt-0.5">
@@ -815,6 +931,9 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Futuristic Holographic Branching Path & Junction Switching HUD */}
+      <JunctionHUD telemetry={junctionTelemetry} onSelectRoute={onSelectRoute} />
     </div>
   );
 };

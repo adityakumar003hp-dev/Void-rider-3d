@@ -29,7 +29,12 @@ import {
   ShipDamageZones,
   CustomRoomSettings,
   MultiplayerMode,
+  BeamTelemetry,
+  BeamCustomization,
+  BeamUpgrades,
 } from './types';
+import { DEFAULT_BEAM_CUSTOMIZATION, DEFAULT_BEAM_UPGRADES } from './game/beamSystem';
+import { ActiveJunctionTelemetry, BranchRouteDirection } from './game/junctionSystem';
 import { MainMenu } from './components/MainMenu';
 import { LobbyView } from './components/LobbyView';
 import { GarageView } from './components/GarageView';
@@ -125,8 +130,15 @@ export default function App() {
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [ping, setPing] = useState<number>(18);
 
-  // Keyboard input tracking
+  // Asteroid Beam Telemetry
+  const [beamTelemetry, setBeamTelemetry] = useState<BeamTelemetry | null>(null);
+
+  // Branching Path & Junction Switching Telemetry
+  const [junctionTelemetry, setJunctionTelemetry] = useState<ActiveJunctionTelemetry | null>(null);
+
+  // Keyboard & Mouse input tracking
   const keysPressed = useRef<{ [key: string]: boolean }>({});
+  const isRightMouseDown = useRef<boolean>(false);
 
   // 1. Initialize GameEngine
   useEffect(() => {
@@ -207,6 +219,8 @@ export default function App() {
       onCameraModeChange: mode => setCameraMode(mode),
       onDamageZonesUpdate: zones => setDamageZones(zones),
       onSpectatorTargetChange: name => setSpectatorTargetName(name),
+      onBeamTelemetry: telemetry => setBeamTelemetry(telemetry),
+      onJunctionTelemetry: telemetry => setJunctionTelemetry(telemetry),
     });
 
     engine.setPlayerShip(
@@ -218,6 +232,13 @@ export default function App() {
       currentThrusterColor,
       currentCockpitSkin
     );
+
+    if (progression.beamCustomization) {
+      engine.setBeamCustomization(progression.beamCustomization);
+    }
+    if (progression.beamUpgrades) {
+      engine.setBeamUpgrades(progression.beamUpgrades);
+    }
 
     engineRef.current = engine;
 
@@ -353,6 +374,17 @@ export default function App() {
         }
       }
 
+      // Branch Route Switching Input (A / D / W or Arrow keys)
+      if (engineRef.current?.junctionManager?.activeJunctionTelemetry) {
+        if (e.code === 'KeyA' || e.code === 'ArrowLeft') {
+          engineRef.current.input.selectRouteDirection = 'LEFT';
+        } else if (e.code === 'KeyD' || e.code === 'ArrowRight') {
+          engineRef.current.input.selectRouteDirection = 'RIGHT';
+        } else if (e.code === 'KeyW' || e.code === 'ArrowUp') {
+          engineRef.current.input.selectRouteDirection = 'CENTER';
+        }
+      }
+
       updateInputState();
     };
 
@@ -375,22 +407,51 @@ export default function App() {
 
       const boostActive = !!keys['Space'];
       const driftActive = !!keys['ShiftLeft'] || !!keys['ShiftRight'];
+      const beamActive = !!keys['KeyE'] || isRightMouseDown.current;
 
       engineRef.current.input = {
+        ...engineRef.current.input,
         throttle,
         steer,
         boost: boostActive,
         drift: driftActive,
+        fireBeam: beamActive,
         recover: false,
       };
     };
 
+    const handleMouseDown = (e: MouseEvent) => {
+      if (e.button === 2) {
+        isRightMouseDown.current = true;
+        updateInputState();
+      }
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      if (e.button === 2) {
+        isRightMouseDown.current = false;
+        updateInputState();
+      }
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+      if (appState === 'RACING') {
+        e.preventDefault();
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('contextmenu', handleContextMenu);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('contextmenu', handleContextMenu);
     };
   }, [appState]);
 
@@ -689,6 +750,38 @@ export default function App() {
     }
   };
 
+  const handleUpdateBeamCustomization = (customization: BeamCustomization) => {
+    setProgression(prev => {
+      const updated = { ...prev, beamCustomization: customization };
+      progressionStorage.save(updated);
+      return updated;
+    });
+    if (engineRef.current) {
+      engineRef.current.setBeamCustomization(customization);
+    }
+  };
+
+  const handlePurchaseBeamUpgrade = (upgradeKey: keyof BeamUpgrades, cost: number) => {
+    const currentBeamUpgrades = progression.beamUpgrades || DEFAULT_BEAM_UPGRADES;
+    const currentLvl = currentBeamUpgrades[upgradeKey] || 0;
+    const nextLvl = currentLvl + 1;
+    const updatedBeamUpgrades = { ...currentBeamUpgrades, [upgradeKey]: nextLvl };
+
+    setProgression(prev => {
+      const updated = {
+        ...prev,
+        credits: prev.credits - cost,
+        beamUpgrades: updatedBeamUpgrades,
+      };
+      progressionStorage.save(updated);
+      return updated;
+    });
+
+    if (engineRef.current) {
+      engineRef.current.setBeamUpgrades(updatedBeamUpgrades);
+    }
+  };
+
   const handleUnlockShip = (shipId: string, cost: number) => {
     setProgression(prev => {
       const updated = {
@@ -761,6 +854,8 @@ export default function App() {
           currentThrusterColor={currentThrusterColor}
           currentCockpitSkin={currentCockpitSkin}
           currentUpgrades={currentUpgrades}
+          currentBeamCustomization={progression.beamCustomization || DEFAULT_BEAM_CUSTOMIZATION}
+          currentBeamUpgrades={progression.beamUpgrades || DEFAULT_BEAM_UPGRADES}
           unlockedShips={progression.unlockedShipIds}
           credits={progression.credits}
           playerLevel={progression.level}
@@ -773,6 +868,8 @@ export default function App() {
           onSelectThrusterColor={handleSelectThrusterColor}
           onSelectCockpitSkin={handleSelectCockpitSkin}
           onPurchaseUpgrade={handlePurchaseUpgrade}
+          onUpdateBeamCustomization={handleUpdateBeamCustomization}
+          onPurchaseBeamUpgrade={handlePurchaseBeamUpgrade}
           onUnlockShip={handleUnlockShip}
           onBack={() => setAppState('MAIN_MENU')}
         />
@@ -837,6 +934,13 @@ export default function App() {
           damageZones={damageZones}
           isSpectator={engineRef.current?.isSpectator}
           spectatorTargetName={spectatorTargetName}
+          beamTelemetry={beamTelemetry}
+          junctionTelemetry={junctionTelemetry}
+          onSelectRoute={direction => {
+            if (engineRef.current) {
+              engineRef.current.input.selectRouteDirection = direction;
+            }
+          }}
           onNextSpectatorTarget={() => engineRef.current?.cycleSpectatorTarget()}
           onTogglePause={handleTogglePause}
           onToggleCamera={() => {

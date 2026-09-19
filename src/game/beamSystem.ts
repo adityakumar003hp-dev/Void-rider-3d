@@ -44,27 +44,6 @@ export const DEFAULT_BEAM_UPGRADES: BeamUpgrades = {
 
 // Mode-Specific Beam Rules
 export const MODE_BEAM_CONFIGS: Record<GameMode, ModeBeamConfig> = {
-  ASTEROID_RUN: {
-    beamEnabled: true,
-    beamDamageMultiplier: 1.35,
-    beamEnergyMultiplier: 0.85, // Lower consumption
-    beamCooldown: 2.2,
-    allowedTargets: ['ASTEROID', 'DEBRIS', 'BARRIER'],
-  },
-  SURVIVAL: {
-    beamEnabled: true,
-    beamDamageMultiplier: 1.15,
-    beamEnergyMultiplier: 0.95,
-    beamCooldown: 2.6,
-    allowedTargets: ['ASTEROID', 'DEBRIS', 'BARRIER'],
-  },
-  CHALLENGE: {
-    beamEnabled: true,
-    beamDamageMultiplier: 1.2,
-    beamEnergyMultiplier: 1.0,
-    beamCooldown: 2.5,
-    allowedTargets: ['ASTEROID', 'DEBRIS', 'BARRIER'],
-  },
   STANDARD: {
     beamEnabled: true,
     beamDamageMultiplier: 1.0,
@@ -86,6 +65,13 @@ export const MODE_BEAM_CONFIGS: Record<GameMode, ModeBeamConfig> = {
     beamCooldown: 2.8,
     allowedTargets: ['ASTEROID', 'DEBRIS'],
   },
+  SURVIVAL: {
+    beamEnabled: true,
+    beamDamageMultiplier: 1.35,
+    beamEnergyMultiplier: 0.85, // Lower consumption for high hazard density
+    beamCooldown: 2.2,
+    allowedTargets: ['ASTEROID', 'DEBRIS', 'BARRIER'],
+  },
   ELIMINATION: {
     beamEnabled: true,
     beamDamageMultiplier: 1.15,
@@ -93,18 +79,39 @@ export const MODE_BEAM_CONFIGS: Record<GameMode, ModeBeamConfig> = {
     beamCooldown: 2.5,
     allowedTargets: ['ASTEROID', 'DEBRIS', 'BARRIER'],
   },
-  SPEED_RUN: {
+  ELIMINATOR: {
+    beamEnabled: true,
+    beamDamageMultiplier: 1.15,
+    beamEnergyMultiplier: 0.9,
+    beamCooldown: 2.5,
+    allowedTargets: ['ASTEROID', 'DEBRIS', 'BARRIER'],
+  },
+  ENDURANCE: {
     beamEnabled: true,
     beamDamageMultiplier: 1.2,
-    beamEnergyMultiplier: 0.9,
+    beamEnergyMultiplier: 0.8,
     beamCooldown: 2.4,
-    allowedTargets: ['ASTEROID', 'DEBRIS'],
+    allowedTargets: ['ASTEROID', 'DEBRIS', 'BARRIER'],
   },
   DUEL: {
     beamEnabled: true,
     beamDamageMultiplier: 1.1,
     beamEnergyMultiplier: 1.0,
     beamCooldown: 2.8,
+    allowedTargets: ['ASTEROID', 'DEBRIS', 'BARRIER'],
+  },
+  CHALLENGE: {
+    beamEnabled: true,
+    beamDamageMultiplier: 1.25,
+    beamEnergyMultiplier: 0.95,
+    beamCooldown: 2.5,
+    allowedTargets: ['ASTEROID', 'DEBRIS', 'BARRIER'],
+  },
+  FREE_RIDE: {
+    beamEnabled: true,
+    beamDamageMultiplier: 1.5,
+    beamEnergyMultiplier: 0.5,
+    beamCooldown: 1.5,
     allowedTargets: ['ASTEROID', 'DEBRIS', 'BARRIER'],
   },
 };
